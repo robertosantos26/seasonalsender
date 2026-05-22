@@ -12,8 +12,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 app = Flask(__name__)
 
 
-APP_DATA_FILE = "data_store.json"
-APP_CONFIG_FILE = "config_store.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DATA_FILE = os.path.join(BASE_DIR, "data_store.json")
+APP_CONFIG_FILE = os.path.join(BASE_DIR, "config_store.json")
+STORE_LOCK = threading.Lock()
 
 def load_json_file(path, default):
     if not os.path.exists(path):
@@ -27,9 +29,13 @@ def load_json_file(path, default):
 
 def save_json_file(path, data):
     tmp_path = f"{path}.tmp"
-    with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, path)
+    with STORE_LOCK:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
 
 def save_data_store():
     save_json_file(APP_DATA_FILE, DATA)
