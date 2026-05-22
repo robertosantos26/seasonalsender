@@ -224,6 +224,11 @@ select option{background:#1a1d2e}
             </select>
           </div>
           <div class="fg"><label class="fl">Filtrar por palavra-chave (opcional)</label><input class="fi ff" id="ckw" placeholder="farm, harvest, picking — deixe vazio para todas"></div>
+          <div class="fg">
+            <label class="fl">URL pública para rastreio de abertura (opcional)</label>
+            <input class="fi ff" id="ctrack" placeholder="https://seu-app.onrender.com">
+            <div style="font-size:11px;color:#555;margin-top:3px">Necessário para rastrear abertura via pixel. Sem URL pública, o rastreio de abertura não dispara.</div>
+          </div>
         </div>
       </div>
       <div>
@@ -598,6 +603,7 @@ async function loadCfg(){
   document.getElementById('ctime').value=c.send_time||'08:00';
   document.getElementById('cjtype').value=c.job_type||'all';
   document.getElementById('ckw').value=c.keywords||'';
+  document.getElementById('ctrack').value=c.tracking_base_url||'';
   if(!c.has_password)document.getElementById('cfg-warn').style.display='flex';
 }
 
@@ -618,6 +624,7 @@ async function saveCfg(){
     send_time:document.getElementById('ctime').value,
     job_type:document.getElementById('cjtype').value,
     keywords:document.getElementById('ckw').value,
+    tracking_base_url:document.getElementById('ctrack').value,
   };
   if(pass&&pass!=='••••••••')cfg.email_password=pass;
   await api('/api/config','POST',cfg);

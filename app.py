@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 import os, smtplib, schedule, time, threading, requests, traceback, urllib.parse, json, imaplib, email
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -72,6 +72,8 @@ def save_user_config(cfg):
 DATA = load_json_file(APP_DATA_FILE, {"jobs": [], "sent_ids": [], "logs": [], "sent_applications": []})
 if "sent_applications" not in DATA:
     DATA["sent_applications"] = []
+if "open_events" not in DATA:
+    DATA["open_events"] = []
 
 RSS_URL = "https://seasonaljobs.dol.gov/job_rss.xml"
 
@@ -106,6 +108,7 @@ def get_config():
         "send_time":          file_cfg.get("send_time") or os.environ.get("SEND_TIME", "08:00"),
         "keywords":           file_cfg.get("keywords") or os.environ.get("SEARCH_KEYWORDS", ""),
         "job_type":           file_cfg.get("job_type") or os.environ.get("JOB_TYPE", "all"),
+        "tracking_base_url":  file_cfg.get("tracking_base_url") or os.environ.get("TRACKING_BASE_URL", ""),
     }
 
 def is_agricultural(job):
@@ -271,13 +274,29 @@ def attach_file(msg, filename):
         msg.attach(part)
     return True
 
-def send_email_smtp(to_email, subject, body, cv_file, cover_file, config):
+def _build_tracking_url(config, tracking_token):
+    base = (config.get("tracking_base_url") or "").strip()
+    if not base:
+        return ""
+    return f"{base.rstrip('/')}/api/track-open/{tracking_token}"
+
+def send_email_smtp(to_email, subject, body, cv_file, cover_file, config, tracking_token=None):
     try:
         msg = MIMEMultipart()
         msg['From']    = config['email']
         msg['To']      = to_email
         msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        if tracking_token:
+            track_url = _build_tracking_url(config, tracking_token)
+            if track_url:
+                html_body = (
+                    f"<html><body>"
+                    f"{body.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(chr(10), '<br>')}"
+                    f"<img src=\"{track_url}\" width=\"1\" height=\"1\" style=\"display:none;\" alt=\"\" />"
+                    f"</body></html>"
+                )
+                msg.attach(MIMEText(html_body, 'html', 'utf-8'))
         attached_files = []
         if cv_file and attach_file(msg, cv_file):
             attached_files.append(cv_file)
@@ -325,7 +344,7 @@ def api_save_config():
         allowed = {
             "name", "email", "email_password", "smtp_server", "smtp_port", "phone",
             "cv_agricultural", "cv_non_agricultural", "cover_letter_agricultural", "cover_letter_non_agricultural", "email_subject", "email_body",
-            "send_time", "keywords", "job_type", "imap_server", "imap_port"
+            "send_time", "keywords", "job_type", "imap_server", "imap_port", "tracking_base_url"
         }
         current = get_user_config()
         for k, v in body.items():
@@ -435,7 +454,8 @@ def api_send(job_id):
                             "url": job.get('url', '')})
 
         if config.get('email_password'):
-            success, msg, message_id = send_email_smtp(to_email, subject, body, cv, cover, config)
+            tracking_token = f"{job_id}_{int(time.time())}"
+            success, msg, message_id = send_email_smtp(to_email, subject, body, cv, cover, config, tracking_token)
             if success:
                 job['status'] = 'sent'
                 if job_id not in DATA['sent_ids']:
@@ -445,7 +465,10 @@ def api_send(job_id):
                     "to": to_email.lower(),
                     "subject": subject,
                     "message_id": message_id,
-                    "sent_at": datetime.now().isoformat()
+                    "sent_at": datetime.now().isoformat(),
+                    "tracking_token": tracking_token,
+                    "open_count": 0,
+                    "opened_at": None,
                 })
                 add_log(f"Enviado: {job['title']} -> {to_email}", "sent")
                 save_data_store()
@@ -473,7 +496,8 @@ def api_send_all():
         for job in pending:
             subject, body, cv, cover = build_email_content(job, config)
             if config.get('email_password'):
-                ok, msg, message_id = send_email_smtp(job['contactEmail'], subject, body, cv, cover, config)
+                tracking_token = f"{job['id']}_{int(time.time())}"
+                ok, msg, message_id = send_email_smtp(job['contactEmail'], subject, body, cv, cover, config, tracking_token)
                 if ok:
                     job['status'] = 'sent'
                     if job['id'] not in DATA['sent_ids']:
@@ -483,7 +507,10 @@ def api_send_all():
                         "to": job["contactEmail"].lower(),
                         "subject": subject,
                         "message_id": message_id,
-                        "sent_at": datetime.now().isoformat()
+                        "sent_at": datetime.now().isoformat(),
+                        "tracking_token": tracking_token,
+                        "open_count": 0,
+                        "opened_at": None,
                     })
                     add_log(f"Auto-enviado: {job['title']}", "sent")
                 results.append({"title": job['title'], "success": ok})
@@ -535,6 +562,32 @@ def api_check_replies():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 
+@app.route('/api/track-open/<token>', methods=['GET'])
+def api_track_open(token):
+    try:
+        match = next((a for a in DATA.get("sent_applications", []) if a.get("tracking_token") == token), None)
+        if match:
+            match["open_count"] = int(match.get("open_count", 0)) + 1
+            if not match.get("opened_at"):
+                match["opened_at"] = datetime.now().isoformat()
+            DATA["open_events"].insert(0, {
+                "token": token,
+                "job_id": match.get("job_id"),
+                "to": match.get("to"),
+                "time": datetime.now().isoformat()
+            })
+            DATA["open_events"] = DATA["open_events"][:500]
+            add_log(f"Email aberto (pixel): {match.get('to','destinatário')}", "found")
+            save_data_store()
+    except Exception:
+        pass
+    gif = (
+        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
+        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
+        b"\x00\x02\x02D\x01\x00;"
+    )
+    return Response(gif, mimetype='image/gif')
+
 @app.route('/api/logs', methods=['GET'])
 def api_logs():
     return jsonify(DATA['logs'][:50])
@@ -552,10 +605,11 @@ def api_stats():
             "agricultural":     len([j for j in jobs if j.get('agri')]),
             "non_agricultural": len([j for j in jobs if not j.get('agri')]),
             "with_email":       len([j for j in jobs if j.get('contactEmail')]),
+            "opened":           len([a for a in DATA.get("sent_applications", []) if a.get("open_count", 0) > 0]),
         })
     except Exception as e:
         return jsonify({"total":0,"sent":0,"pending":0,"today":0,
-                        "agricultural":0,"non_agricultural":0,"with_email":0})
+                        "agricultural":0,"non_agricultural":0,"with_email":0,"opened":0})
 
 def scheduler_loop():
     config = get_config()
@@ -573,7 +627,8 @@ def scheduler_loop():
                 for job in DATA['jobs']:
                     if job.get('status') == 'pending' and job.get('contactEmail'):
                         s, b, cv, cover = build_email_content(job, cfg)
-                        ok, _, message_id = send_email_smtp(job['contactEmail'], s, b, cv, cover, cfg)
+                        tracking_token = f"{job['id']}_{int(time.time())}"
+                        ok, _, message_id = send_email_smtp(job['contactEmail'], s, b, cv, cover, cfg, tracking_token)
                         if ok:
                             job['status'] = 'sent'
                             DATA["sent_applications"].append({
@@ -581,7 +636,10 @@ def scheduler_loop():
                                 "to": job["contactEmail"].lower(),
                                 "subject": s,
                                 "message_id": message_id,
-                                "sent_at": datetime.now().isoformat()
+                                "sent_at": datetime.now().isoformat(),
+                                "tracking_token": tracking_token,
+                                "open_count": 0,
+                                "opened_at": None,
                             })
                             add_log(f"Auto: {job['title']}", "sent")
                             save_data_store()
