@@ -119,6 +119,7 @@ select option{background:#1a1d2e}
     <div class="pill"><div class="dot"></div><span id="status-text">Conectado ao DOL.GOV</span></div>
     <button class="btn bo bsm" onclick="openScan()"><i class="ti ti-refresh"></i> Buscar Vagas</button>
     <button class="btn bp bsm" onclick="sendAll()"><i class="ti ti-send"></i> Enviar Pendentes</button>
+    <button class="btn bo bsm" onclick="checkReplies()"><i class="ti ti-mail-search"></i> Ver Respostas</button>
   </div>
 </div>
 
@@ -204,6 +205,10 @@ select option{background:#1a1d2e}
           <div class="fg"><label class="fl">Servidor SMTP</label><input class="fi ff" id="cs2" value="smtp.gmail.com"></div>
           <div class="fg"><label class="fl">Porta SMTP</label><input class="fi ff" id="cport" value="587" type="number"></div>
           <div class="fg"><label class="fl">Telefone / WhatsApp</label><input class="fi ff" id="cph" placeholder="+55 54 99999-9999"></div>
+          <div class="fg">
+            <label class="fl">📎 Cover Letter Geral — nome do arquivo em /curriculos/ ou /curriculo/</label>
+            <input class="fi ff" id="ccln" value="cover_letter_geral.pdf">
+          </div>
         </div>
         <div class="cs">
           <div class="cst"><i class="ti ti-clock"></i>Automação</div>
@@ -233,6 +238,14 @@ select option{background:#1a1d2e}
             <label class="fl">📎 Currículo Geral (H-2B) — nome do arquivo em /curriculos/</label>
             <input class="fi ff" id="ccvn" value="curriculo_geral.pdf">
             <div style="font-size:11px;color:#555;margin-top:3px">Para: hospitality, landscaping, forestry, housekeeping...</div>
+          </div>
+          <div class="fg">
+            <label class="fl">📎 Cover Letter Agrícola — nome do arquivo em /curriculos/ ou /curriculo/</label>
+            <input class="fi ff" id="ccla" value="cover_letter_agricola.pdf">
+          </div>
+          <div class="fg">
+            <label class="fl">📎 Cover Letter Geral — nome do arquivo em /curriculos/ ou /curriculo/</label>
+            <input class="fi ff" id="ccln" value="cover_letter_geral.pdf">
           </div>
         </div>
         <div class="cs">
@@ -389,10 +402,10 @@ function renderJobs(jobs){
       </div>
       <div style="font-size:12px;color:#888;line-height:1.5;margin-top:4px">${(j.description||'').substring(0,200)}${j.description&&j.description.length>200?'...':''}</div>
       <div class="jca">
-        ${j.contactEmail?`<button class="btn bp bsm" onclick="sendOne('${j.id}')"><i class="ti ti-send"></i> Enviar Email</button>`:''}
-        ${j.contactEmail?`<button class="btn bo bsm" onclick="previewEmail('${j.id}')"><i class="ti ti-eye"></i> Ver Email</button>`:''}
+        ${j.contactEmail&&j.status!=='sent'?`<button class="btn bp bsm" onclick="sendOne('${j.id}')"><i class="ti ti-send"></i> Enviar Email</button>`:''}
+        ${j.contactEmail&&j.status!=='sent'?`<button class="btn bo bsm" onclick="previewEmail('${j.id}')"><i class="ti ti-eye"></i> Ver Email</button>`:''}
         <a href="${j.url}" target="_blank" class="btn bo bsm"><i class="ti ti-external-link"></i> Ver Vaga DOL</a>
-        ${!j.contactEmail&&!j.contactPhone?`<button class="btn bo bsm" onclick="enrichJob('${j.id}',this)"><i class="ti ti-refresh"></i> Carregar Contato</button>`:''}
+        ${(!j.contactEmail||!j.salary)?`<button class="btn bo bsm" onclick="enrichJob('${j.id}',this)"><i class="ti ti-refresh"></i> Carregar Contato</button>`:''}
         <span style="margin-left:auto" class="${j.status==='sent'?'bse':'bpe'}">${j.status==='sent'?'✓ Enviado':'⏳ Pendente'}</span>
       </div>
     </div>`).join('');
@@ -460,6 +473,7 @@ async function previewEmail(jobId){
         </div>
         <div class="epb">${r.body}</div>
         <div class="epa"><i class="ti ti-paperclip"></i>${r.cv} <span style="color:#555">(${job.agri?'Currículo Agrícola H-2A':'Currículo Geral H-2B'})</span></div>
+        ${r.cover_letter?`<div class="epa"><i class="ti ti-file-description"></i>${r.cover_letter} <span style="color:#555">(Cover Letter)</span></div>`:''}
       </div>`;
     document.getElementById('em-send').onclick=()=>{window.open(r.mailto);closeEmail();loadJobs();loadStats();loadLogs();};
   }
@@ -546,14 +560,24 @@ async function doScan(){
     setTimeout(async()=>{
       closeScan();
       await loadJobs();loadStats();loadLogs();
-      const msg = r.new>0?`${r.new} novas vagas carregadas! Carregando contatos...`:'Nenhuma vaga nova.';
+      const msg = r.new>0?`${r.new} novas vagas carregadas! Clique em \"Carregar Contato\" para buscar email e salário.`:'Nenhuma vaga nova.';
       toast(msg);
-      if(r.new>0) autoEnrichAll();
     },800);
   }catch(e){
     clearInterval(iv);
     document.getElementById('sc-ptxt').textContent='Erro de rede: '+e.message;
     btn.disabled=false;btn.innerHTML='<i class="ti ti-refresh"></i> Tentar novamente';
+  }
+}
+
+
+async function checkReplies(){
+  const r=await api('/api/check-replies','POST');
+  if(r.success){
+    toast(`Verificação concluída: ${r.replies_found||0} novas respostas.`);
+    loadLogs();
+  } else {
+    toast(r.message||'Não foi possível verificar respostas.', false);
   }
 }
 
@@ -567,6 +591,8 @@ async function loadCfg(){
   document.getElementById('cph').value=c.phone||'';
   document.getElementById('ccva').value=c.cv_agricultural||'curriculo_agricola.pdf';
   document.getElementById('ccvn').value=c.cv_non_agricultural||'curriculo_geral.pdf';
+  document.getElementById('ccla').value=c.cover_letter_agricultural||'cover_letter_agricola.pdf';
+  document.getElementById('ccln').value=c.cover_letter_non_agricultural||'cover_letter_geral.pdf';
   document.getElementById('csubj').value=c.email_subject||'';
   document.getElementById('cbody').value=c.email_body||'';
   document.getElementById('ctime').value=c.send_time||'08:00';
@@ -585,6 +611,8 @@ async function saveCfg(){
     phone:document.getElementById('cph').value,
     cv_agricultural:document.getElementById('ccva').value,
     cv_non_agricultural:document.getElementById('ccvn').value,
+    cover_letter_agricultural:document.getElementById('ccla').value,
+    cover_letter_non_agricultural:document.getElementById('ccln').value,
     email_subject:document.getElementById('csubj').value,
     email_body:document.getElementById('cbody').value,
     send_time:document.getElementById('ctime').value,
