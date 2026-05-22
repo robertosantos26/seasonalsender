@@ -40,7 +40,9 @@ def get_user_config():
 def save_user_config(cfg):
     save_json_file(APP_CONFIG_FILE, cfg)
 
-DATA = load_json_file(APP_DATA_FILE, {"jobs": [], "sent_ids": [], "logs": []})
+DATA = load_json_file(APP_DATA_FILE, {"jobs": [], "sent_ids": [], "logs": [], "sent_applications": []})
+if "sent_applications" not in DATA:
+    DATA["sent_applications"] = []
 
 RSS_URL = "https://seasonaljobs.dol.gov/job_rss.xml"
 
@@ -259,9 +261,9 @@ def send_email_smtp(to_email, subject, body, cv_file, cover_file, config):
         srv.login(config['email'], config['email_password'])
         srv.sendmail(config['email'], to_email, msg.as_string())
         srv.quit()
-        return True, "Enviado"
+        return True, "Enviado", msg.get('Message-ID', '')
     except Exception as e:
-        return False, str(e)
+        return False, str(e), ''
 
 # ── ROTAS ──────────────────────────────────────────────────
 
@@ -405,11 +407,18 @@ def api_send(job_id):
                             "url": job.get('url', '')})
 
         if config.get('email_password'):
-            success, msg = send_email_smtp(to_email, subject, body, cv, cover, config)
+            success, msg, message_id = send_email_smtp(to_email, subject, body, cv, cover, config)
             if success:
                 job['status'] = 'sent'
                 if job_id not in DATA['sent_ids']:
                     DATA['sent_ids'].append(job_id)
+                DATA["sent_applications"].append({
+                    "job_id": job_id,
+                    "to": to_email.lower(),
+                    "subject": subject,
+                    "message_id": message_id,
+                    "sent_at": datetime.now().isoformat()
+                })
                 add_log(f"Enviado: {job['title']} -> {to_email}", "sent")
                 save_data_store()
             else:
@@ -436,11 +445,18 @@ def api_send_all():
         for job in pending:
             subject, body, cv, cover = build_email_content(job, config)
             if config.get('email_password'):
-                ok, msg = send_email_smtp(job['contactEmail'], subject, body, cv, cover, config)
+                ok, msg, message_id = send_email_smtp(job['contactEmail'], subject, body, cv, cover, config)
                 if ok:
                     job['status'] = 'sent'
                     if job['id'] not in DATA['sent_ids']:
                         DATA['sent_ids'].append(job['id'])
+                    DATA["sent_applications"].append({
+                        "job_id": job["id"],
+                        "to": job["contactEmail"].lower(),
+                        "subject": subject,
+                        "message_id": message_id,
+                        "sent_at": datetime.now().isoformat()
+                    })
                     add_log(f"Auto-enviado: {job['title']}", "sent")
                 results.append({"title": job['title'], "success": ok})
         if results:
@@ -461,19 +477,29 @@ def api_check_replies():
         mail = imaplib.IMAP4_SSL(cfg.get('imap_server'), int(cfg.get('imap_port')))
         mail.login(cfg.get('email'), cfg.get('email_password'))
         mail.select('INBOX')
+        sent_apps = DATA.get("sent_applications", [])
+        tracked_to = {a.get("to", "").lower() for a in sent_apps if a.get("to")}
+        tracked_subjects = {a.get("subject", "").lower() for a in sent_apps if a.get("subject")}
+        if not tracked_to and not tracked_subjects:
+            mail.logout()
+            return jsonify({"success": True, "replies_found": 0, "message": "Nenhuma candidatura enviada registrada para rastrear."})
+
         typ, data = mail.search(None, '(UNSEEN)')
         count = 0
         if typ == 'OK' and data and data[0]:
-            for num in data[0].split()[:20]:
+            for num in data[0].split()[:50]:
                 _, msg_data = mail.fetch(num, '(RFC822)')
-                if not msg_data:
+                if not msg_data or not msg_data[0]:
                     continue
                 raw = msg_data[0][1]
                 em = email.message_from_bytes(raw)
                 sender = em.get('From', 'desconhecido')
                 subject = em.get('Subject', '(sem assunto)')
-                add_log(f"Resposta recebida: {sender} | {subject}", 'found')
-                count += 1
+                from_l = sender.lower()
+                sub_l = subject.lower()
+                if any(t in from_l for t in tracked_to) or any(s in sub_l for s in tracked_subjects):
+                    add_log(f"Resposta de candidatura: {sender} | {subject}", 'found')
+                    count += 1
         mail.logout()
         if count:
             save_data_store()
@@ -519,9 +545,16 @@ def scheduler_loop():
                 for job in DATA['jobs']:
                     if job.get('status') == 'pending' and job.get('contactEmail'):
                         s, b, cv, cover = build_email_content(job, cfg)
-                        ok, _ = send_email_smtp(job['contactEmail'], s, b, cv, cover, cfg)
+                        ok, _, message_id = send_email_smtp(job['contactEmail'], s, b, cv, cover, cfg)
                         if ok:
                             job['status'] = 'sent'
+                            DATA["sent_applications"].append({
+                                "job_id": job["id"],
+                                "to": job["contactEmail"].lower(),
+                                "subject": s,
+                                "message_id": message_id,
+                                "sent_at": datetime.now().isoformat()
+                            })
                             add_log(f"Auto: {job['title']}", "sent")
                             save_data_store()
         except Exception as e:

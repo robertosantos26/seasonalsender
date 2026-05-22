@@ -402,8 +402,8 @@ function renderJobs(jobs){
       </div>
       <div style="font-size:12px;color:#888;line-height:1.5;margin-top:4px">${(j.description||'').substring(0,200)}${j.description&&j.description.length>200?'...':''}</div>
       <div class="jca">
-        ${j.contactEmail?`<button class="btn bp bsm" onclick="sendOne('${j.id}')"><i class="ti ti-send"></i> Enviar Email</button>`:''}
-        ${j.contactEmail?`<button class="btn bo bsm" onclick="previewEmail('${j.id}')"><i class="ti ti-eye"></i> Ver Email</button>`:''}
+        ${j.contactEmail&&j.status!=='sent'?`<button class="btn bp bsm" onclick="sendOne('${j.id}')"><i class="ti ti-send"></i> Enviar Email</button>`:''}
+        ${j.contactEmail&&j.status!=='sent'?`<button class="btn bo bsm" onclick="previewEmail('${j.id}')"><i class="ti ti-eye"></i> Ver Email</button>`:''}
         <a href="${j.url}" target="_blank" class="btn bo bsm"><i class="ti ti-external-link"></i> Ver Vaga DOL</a>
         ${(!j.contactEmail||!j.salary)?`<button class="btn bo bsm" onclick="enrichJob('${j.id}',this)"><i class="ti ti-refresh"></i> Carregar Contato</button>`:''}
         <span style="margin-left:auto" class="${j.status==='sent'?'bse':'bpe'}">${j.status==='sent'?'✓ Enviado':'⏳ Pendente'}</span>
