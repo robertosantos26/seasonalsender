@@ -18,23 +18,46 @@ APP_CONFIG_FILE = os.path.join(BASE_DIR, "config_store.json")
 STORE_LOCK = threading.Lock()
 
 def load_json_file(path, default):
-    if not os.path.exists(path):
-        return default
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
+    def _read_json(p):
+        with open(p, 'r', encoding='utf-8') as f:
             data = json.load(f)
             return data if isinstance(data, type(default)) else default
+    if not os.path.exists(path):
+        bak = f"{path}.bak"
+        if os.path.exists(bak):
+            try:
+                return _read_json(bak)
+            except Exception:
+                return default
+        return default
+    try:
+        return _read_json(path)
     except Exception:
+        bak = f"{path}.bak"
+        if os.path.exists(bak):
+            try:
+                return _read_json(bak)
+            except Exception:
+                pass
         return default
 
 def save_json_file(path, data):
     tmp_path = f"{path}.tmp"
+    bak_path = f"{path}.bak"
     with STORE_LOCK:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as src, open(bak_path, 'w', encoding='utf-8') as dst:
+                    dst.write(src.read())
+                    dst.flush()
+                    os.fsync(dst.fileno())
+            except Exception:
+                pass
         os.replace(tmp_path, path)
 
 def save_data_store():
@@ -339,8 +362,7 @@ def api_scrape():
                 DATA['jobs'].append(job)
                 existing_ids.add(job['id'])
                 added.append(job)
-        if added:
-            save_data_store()
+        save_data_store()
 
         return jsonify({"success": True, "scraped": len(new_rss),
                         "new": len(added), "jobs": added})
