@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify
-import os, smtplib, schedule, time, threading, requests
+import os, smtplib, schedule, time, threading, requests, traceback
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -13,7 +13,6 @@ app = Flask(__name__)
 DATA = {"jobs": [], "sent_ids": [], "logs": []}
 
 RSS_URL  = "https://seasonaljobs.dol.gov/job_rss.xml"
-JOB_BASE = "https://seasonaljobs.dol.gov/jobs/"
 
 AGRI_KW = [
     'farm','harvest','pick','fruit','vegetable','crop','orchard','field',
@@ -33,17 +32,14 @@ def get_config():
         "phone":              os.environ.get("SENDER_PHONE", ""),
         "cv_agricultural":    os.environ.get("CV_AGRI", "curriculo_agricola.pdf"),
         "cv_non_agricultural":os.environ.get("CV_NON_AGRI", "curriculo_geral.pdf"),
-        "email_subject":      os.environ.get("EMAIL_SUBJECT",
-            "Application for {job_title} - {your_name}"),
+        "email_subject":      os.environ.get("EMAIL_SUBJECT", "Application for {job_title} - {your_name}"),
         "email_body":         os.environ.get("EMAIL_BODY",
-            "Dear Hiring Manager,\n\n"
-            "I am writing to apply for the position of {job_title} at {company}.\n\n"
+            "Dear Hiring Manager,\n\nI am writing to apply for the position of {job_title} at {company}.\n\n"
             "I am a motivated and hardworking individual available to start immediately. "
-            "Please find my CV attached for your consideration.\n\n"
-            "Best regards,\n{your_name}\n{your_phone}"),
+            "Please find my CV attached for your consideration.\n\nBest regards,\n{your_name}\n{your_phone}"),
         "send_time":          os.environ.get("SEND_TIME", "08:00"),
         "keywords":           os.environ.get("SEARCH_KEYWORDS", ""),
-        "job_type":           os.environ.get("JOB_TYPE", "all"),  # all / agricultural / non-agricultural
+        "job_type":           os.environ.get("JOB_TYPE", "all"),
     }
 
 def is_agricultural(job):
@@ -55,62 +51,26 @@ def add_log(text, type_="found"):
     if len(DATA['logs']) > 200:
         DATA['logs'] = DATA['logs'][:200]
 
-def fetch_job_detail(url):
-    """Acessa a página individual da vaga e extrai email/telefone/salário reais."""
-    try:
-        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-
-        contact_email, contact_phone, salary, location, company = "", "", "", "", ""
-
-        # Empresa e localização no <h2> logo abaixo do título
-        paragraphs = soup.find_all(['p','dd','dt','span','div'])
-        full_text = soup.get_text(separator='\n')
-
-        # Extrai email do mailto
-        mailto = soup.find('a', href=lambda h: h and h.startswith('mailto:'))
-        if mailto:
-            contact_email = mailto['href'].replace('mailto:', '').strip()
-
-        # Extrai telefone do tel:
-        tel = soup.find('a', href=lambda h: h and h.startswith('tel:'))
-        if tel:
-            contact_phone = tel.get_text(strip=True)
-
-        # Extrai salário — procura por "$" no texto
-        for line in full_text.split('\n'):
-            if '$' in line and ('hour' in line.lower() or 'week' in line.lower() or 'per' in line.lower()):
-                salary = line.strip()[:80]
-                break
-
-        # Empresa e localização (aparecem logo abaixo do h1)
-        h1 = soup.find('h1') or soup.find('h2')
-        if h1:
-            siblings = list(h1.next_siblings)
-            for sib in siblings[:5]:
-                t = sib.get_text(strip=True) if hasattr(sib, 'get_text') else str(sib).strip()
-                if t and not company:
-                    company = t
-                elif t and not location and (',' in t or any(st in t for st in ['AL','AK','AZ','AR','CA','CO','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'])):
-                    location = t
-
-        return {
-            "contactEmail": contact_email,
-            "contactPhone": contact_phone,
-            "salary": salary,
-            "company": company,
-            "location": location,
-        }
-    except Exception as e:
-        return {}
-
 def fetch_rss_jobs(keywords="", job_type="all"):
-    """Lê o RSS oficial do seasonaljobs.dol.gov e retorna lista de vagas."""
+    """Lê RSS oficial do seasonaljobs.dol.gov"""
     jobs = []
+    error_detail = ""
+    
     try:
-        resp = requests.get(RSS_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; SeasonalSender/1.0)',
+            'Accept': 'application/rss+xml, application/xml, text/xml, */*',
+        }
+        resp = requests.get(RSS_URL, headers=headers, timeout=20)
         resp.raise_for_status()
-        root = ET.fromstring(resp.content)
+        
+        # Verifica se é XML válido (não HTML de erro)
+        content = resp.content
+        if content[:5] not in [b'<?xml', b'<rss ']:
+            # Tenta mesmo assim
+            pass
+        
+        root = ET.fromstring(content)
         channel = root.find('channel')
         items = channel.findall('item') if channel else []
 
@@ -122,13 +82,14 @@ def fetch_rss_jobs(keywords="", job_type="all"):
             desc  = (item.findtext('description') or '').strip()
             pub   = (item.findtext('pubDate') or '').strip()
 
-            # Filtro por palavra-chave
+            if not title:
+                continue
+
             if kw_list:
                 combined = (title + ' ' + desc).lower()
                 if not any(k in combined for k in kw_list):
                     continue
 
-            # Determina tipo
             agri = is_agricultural({"title": title, "description": desc})
 
             if job_type == 'agricultural' and not agri:
@@ -136,11 +97,9 @@ def fetch_rss_jobs(keywords="", job_type="all"):
             if job_type == 'non-agricultural' and agri:
                 continue
 
-            # Extrai case number do URL para usar como ID estável
             case_num = link.split('/')[-1] if '/' in link else link
             job_id = f"dol_{case_num}"
 
-            # Data formatada
             try:
                 dt = datetime.strptime(pub, '%a, %d %b %Y %H:%M:%S %Z')
                 date_str = dt.strftime('%d/%m/%Y')
@@ -148,93 +107,79 @@ def fetch_rss_jobs(keywords="", job_type="all"):
                 date_str = datetime.now().strftime('%d/%m/%Y')
 
             jobs.append({
-                "id":           job_id,
-                "title":        title,
-                "company":      "",       # preenchido no detalhe
-                "location":     "",       # preenchido no detalhe
-                "salary":       "",       # preenchido no detalhe
-                "date":         date_str,
-                "contactEmail": "",       # preenchido no detalhe
-                "contactPhone": "",
-                "description":  desc[:500],
-                "url":          link,
-                "status":       "pending",
-                "isNew":        True,
-                "agri":         agri,
-                "source":       "dol.gov",
+                "id": job_id, "title": title, "company": "", "location": "",
+                "salary": "", "date": date_str, "contactEmail": "", "contactPhone": "",
+                "description": desc[:600], "url": link,
+                "status": "pending", "isNew": True, "agri": agri, "source": "dol.gov",
             })
 
-        add_log(f"RSS: {len(items)} vagas encontradas, {len(jobs)} passaram no filtro.", "found")
+        add_log(f"RSS OK: {len(items)} vagas no feed, {len(jobs)} passaram no filtro.", "found")
+        return jobs, None
+
+    except ET.ParseError as e:
+        error_detail = f"XML inválido: {e}. Resposta do servidor: {resp.text[:200] if 'resp' in dir() else 'sem resposta'}"
+    except requests.exceptions.ConnectionError as e:
+        error_detail = f"Sem conexão com seasonaljobs.dol.gov: {e}"
+    except requests.exceptions.Timeout:
+        error_detail = "Timeout ao conectar com seasonaljobs.dol.gov (>20s)"
+    except requests.exceptions.HTTPError as e:
+        error_detail = f"Erro HTTP {resp.status_code}: {e}"
     except Exception as e:
-        add_log(f"Erro ao ler RSS: {e}", "error")
+        error_detail = f"{type(e).__name__}: {e}\n{traceback.format_exc()[-300:]}"
 
-    return jobs
+    add_log(f"Erro RSS: {error_detail}", "error")
+    return [], error_detail
 
-def enrich_job(job):
-    """Busca detalhes reais (email, telefone, salário) na página da vaga."""
-    if not job.get('url'):
-        return job
-    detail = fetch_job_detail(job['url'])
-    job.update({k: v for k, v in detail.items() if v})
-    return job
+def fetch_job_detail(url):
+    """Busca email/telefone/salário na página individual da vaga"""
+    try:
+        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=12)
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        contact_email, contact_phone, salary, location, company = "", "", "", "", ""
 
-# ── ROTAS ──────────────────────────────────────────────────────
+        mailto = soup.find('a', href=lambda h: h and h.startswith('mailto:'))
+        if mailto:
+            contact_email = mailto['href'].replace('mailto:', '').strip()
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+        tel = soup.find('a', href=lambda h: h and h.startswith('tel:'))
+        if tel:
+            contact_phone = tel.get_text(strip=True)
 
-@app.route('/api/config', methods=['GET'])
-def api_get_config():
-    c = get_config()
-    safe = {k: v for k, v in c.items() if k != 'email_password'}
-    safe['has_password'] = bool(c.get('email_password'))
-    return jsonify(safe)
+        full_text = soup.get_text(separator='\n')
+        for line in full_text.split('\n'):
+            ln = line.strip()
+            if '$' in ln and any(w in ln.lower() for w in ['hour','week','per','rate']):
+                salary = ln[:80]
+                break
 
-@app.route('/api/jobs', methods=['GET'])
-def api_jobs():
-    return jsonify(DATA['jobs'])
+        h1 = soup.find('h1') or soup.find('h2')
+        if h1:
+            for sib in list(h1.next_siblings)[:6]:
+                t = sib.get_text(strip=True) if hasattr(sib, 'get_text') else ''
+                if t and not company:
+                    company = t
+                elif t and not location and any(s in t for s in [', CA', ', TX', ', FL', ', WA', ', OR', ', NY', ', NC', ', GA', ', AZ', ', CO', ', ID', ', MI', ', MN', ', MO', ', MT', ', NE', ', NV', ', OH', ', PA', ', VA', ', WI']):
+                    location = t
+                    break
 
-@app.route('/api/scrape', methods=['POST'])
-def api_scrape():
-    body     = request.json or {}
-    keywords = body.get('keywords', '')
-    job_type = body.get('job_type', 'all')
-
-    new_rss = fetch_rss_jobs(keywords, job_type)
-    existing_ids = {j['id'] for j in DATA['jobs']}
-    added = []
-
-    for job in new_rss:
-        if job['id'] not in existing_ids:
-            # Enriquecer com detalhes da página (email real, etc.)
-            job = enrich_job(job)
-            DATA['jobs'].append(job)
-            existing_ids.add(job['id'])
-            added.append(job)
-
-    return jsonify({"scraped": len(new_rss), "new": len(added), "jobs": added})
-
-@app.route('/api/enrich/<job_id>', methods=['POST'])
-def api_enrich(job_id):
-    job = next((j for j in DATA['jobs'] if j['id'] == job_id), None)
-    if not job:
-        return jsonify({"success": False})
-    job = enrich_job(job)
-    return jsonify({"success": True, "job": job})
+        return {"contactEmail": contact_email, "contactPhone": contact_phone,
+                "salary": salary, "company": company, "location": location}
+    except:
+        return {}
 
 def build_email_content(job, config):
-    agri = job.get('agri', False)
-    cv   = config['cv_agricultural'] if agri else config['cv_non_agricultural']
-    subj = (config['email_subject']
-            .replace('{job_title}', job['title'])
-            .replace('{company}',   job.get('company','the company'))
-            .replace('{your_name}', config['name']))
-    body = (config['email_body']
-            .replace('{job_title}', job['title'])
-            .replace('{company}',   job.get('company','the company'))
-            .replace('{your_name}', config['name'])
-            .replace('{your_phone}',config.get('phone','')))
+    agri    = job.get('agri', False)
+    cv      = config['cv_agricultural'] if agri else config['cv_non_agricultural']
+    company = job.get('company') or 'the company'
+    subj    = (config['email_subject']
+               .replace('{job_title}', job['title'])
+               .replace('{company}',   company)
+               .replace('{your_name}', config['name']))
+    body    = (config['email_body']
+               .replace('{job_title}', job['title'])
+               .replace('{company}',   company)
+               .replace('{your_name}', config['name'])
+               .replace('{your_phone}',config.get('phone','')))
     return subj, body, cv
 
 def send_email_smtp(to_email, subject, body, cv_file, config):
@@ -261,6 +206,73 @@ def send_email_smtp(to_email, subject, body, cv_file, config):
     except Exception as e:
         return False, str(e)
 
+# ── ROTAS ──────────────────────────────────────────────────
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/api/ping')
+def ping():
+    """Diagnóstico: testa conexão com DOL"""
+    try:
+        r = requests.get(RSS_URL, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        return jsonify({
+            "status": "ok",
+            "http_code": r.status_code,
+            "content_type": r.headers.get('content-type',''),
+            "first_bytes": r.text[:100]
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/config', methods=['GET'])
+def api_get_config():
+    c = get_config()
+    safe = {k: v for k, v in c.items() if k != 'email_password'}
+    safe['has_password'] = bool(c.get('email_password'))
+    return jsonify(safe)
+
+@app.route('/api/jobs', methods=['GET'])
+def api_jobs():
+    return jsonify(DATA['jobs'])
+
+@app.route('/api/scrape', methods=['POST'])
+def api_scrape():
+    body     = request.json or {}
+    keywords = body.get('keywords', '')
+    job_type = body.get('job_type', 'all')
+
+    new_rss, error = fetch_rss_jobs(keywords, job_type)
+
+    if error and not new_rss:
+        return jsonify({"success": False, "error": error, "scraped": 0, "new": 0, "jobs": []}), 200
+
+    existing_ids = {j['id'] for j in DATA['jobs']}
+    added = []
+    for job in new_rss:
+        if job['id'] not in existing_ids:
+            job = enrich_job(job)
+            DATA['jobs'].append(job)
+            existing_ids.add(job['id'])
+            added.append(job)
+
+    return jsonify({"success": True, "scraped": len(new_rss), "new": len(added), "jobs": added})
+
+def enrich_job(job):
+    if job.get('url'):
+        detail = fetch_job_detail(job['url'])
+        job.update({k: v for k, v in detail.items() if v})
+    return job
+
+@app.route('/api/enrich/<job_id>', methods=['POST'])
+def api_enrich(job_id):
+    job = next((j for j in DATA['jobs'] if j['id'] == job_id), None)
+    if not job:
+        return jsonify({"success": False})
+    job = enrich_job(job)
+    return jsonify({"success": True, "job": job})
+
 @app.route('/api/send/<job_id>', methods=['POST'])
 def api_send(job_id):
     config = get_config()
@@ -269,10 +281,12 @@ def api_send(job_id):
         return jsonify({"success": False, "message": "Vaga não encontrada"})
 
     subject, body, cv = build_email_content(job, config)
-    to_email = job.get('contactEmail','')
+    to_email = job.get('contactEmail', '')
 
     if not to_email:
-        return jsonify({"success": False, "message": "Esta vaga não tem email de contato disponível. Acesse a vaga pelo link e candidate-se diretamente.", "url": job.get('url','')})
+        return jsonify({"success": False, "no_email": True,
+                        "message": "Vaga sem email. Candidate-se pelo link.",
+                        "url": job.get('url', '')})
 
     if config.get('email_password'):
         success, msg = send_email_smtp(to_email, subject, body, cv, config)
@@ -285,13 +299,14 @@ def api_send(job_id):
             add_log(f"✗ Erro: {job['title']} — {msg}", "error")
         return jsonify({"success": success, "message": msg})
     else:
-        mailto = f"mailto:{to_email}?subject={requests.utils.quote(subject)}&body={requests.utils.quote(body + chr(10)*2 + '[Anexar: ' + cv + ']')}"
+        import urllib.parse
+        mailto = f"mailto:{to_email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body + chr(10)*2 + '[Anexar: ' + cv + ']')}"
         return jsonify({"success": True, "manual": True, "mailto": mailto,
                         "cv": cv, "subject": subject, "body": body, "to": to_email})
 
 @app.route('/api/send-all', methods=['POST'])
 def api_send_all():
-    config = get_config()
+    config  = get_config()
     pending = [j for j in DATA['jobs'] if j.get('status') == 'pending' and j.get('contactEmail')]
     results = []
     for job in pending:
@@ -303,7 +318,7 @@ def api_send_all():
                 if job['id'] not in DATA['sent_ids']:
                     DATA['sent_ids'].append(job['id'])
                 add_log(f"✓ Auto-enviado: {job['title']}", "sent")
-            results.append({"title": job['title'], "success": ok, "msg": msg})
+            results.append({"title": job['title'], "success": ok})
     return jsonify({"sent": len([r for r in results if r['success']]), "results": results})
 
 @app.route('/api/logs', methods=['GET'])
@@ -325,10 +340,27 @@ def api_stats():
     })
 
 def scheduler_loop():
-    config    = get_config()
+    config = get_config()
     send_time = config.get('send_time', '08:00')
-    schedule.every().day.at(send_time).do(lambda: requests.post('http://localhost:5000/api/send-all'))
-    schedule.every().day.at(send_time).do(lambda: requests.post('http://localhost:5000/api/scrape', json={}))
+    def daily_job():
+        jobs, _ = fetch_rss_jobs()
+        existing = {j['id'] for j in DATA['jobs']}
+        for job in jobs:
+            if job['id'] not in existing:
+                job = enrich_job(job)
+                DATA['jobs'].append(job)
+                existing.add(job['id'])
+        # auto envia pendentes
+        cfg = get_config()
+        if cfg.get('email_password'):
+            pending = [j for j in DATA['jobs'] if j.get('status') == 'pending' and j.get('contactEmail')]
+            for job in pending:
+                subj, body, cv = build_email_content(job, cfg)
+                ok, _ = send_email_smtp(job['contactEmail'], subj, body, cv, cfg)
+                if ok:
+                    job['status'] = 'sent'
+                    add_log(f"✓ Auto: {job['title']}", "sent")
+    schedule.every().day.at(send_time).do(daily_job)
     while True:
         schedule.run_pending()
         time.sleep(60)
@@ -336,6 +368,5 @@ def scheduler_loop():
 if __name__ == '__main__':
     os.makedirs('curriculos', exist_ok=True)
     threading.Thread(target=scheduler_loop, daemon=True).start()
-    print("\n🌿 SeasonalSender — seasonaljobs.dol.gov")
-    print("   Acesse: http://localhost:5000\n")
+    print("\n🌿 SeasonalSender — http://localhost:5000\n")
     app.run(debug=True, port=5000, use_reloader=False)
