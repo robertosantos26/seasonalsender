@@ -200,16 +200,11 @@ select option{background:#1a1d2e}
           <div class="fg">
             <label class="fl">Senha do email (App Password Gmail)</label>
             <input class="fi ff" id="cp" placeholder="••••••••" type="password">
-            <div style="font-size:11px;color:#555;margin-top:4px">Use "Senha de App" do Google: <a href="https://myaccount.google.com/apppasswords" target="tinz pbgb cgmp kxxa
-" style="color:#4f8ef7">myaccount.google.com/apppasswords →</a></div>
+            <div style="font-size:11px;color:#555;margin-top:4px">Use "Senha de App" do Google: <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:#4f8ef7">myaccount.google.com/apppasswords →</a></div>
           </div>
           <div class="fg"><label class="fl">Servidor SMTP</label><input class="fi ff" id="cs2" value="smtp.gmail.com"></div>
           <div class="fg"><label class="fl">Porta SMTP</label><input class="fi ff" id="cport" value="587" type="number"></div>
           <div class="fg"><label class="fl">Telefone / WhatsApp</label><input class="fi ff" id="cph" placeholder="+55 54 99999-9999"></div>
-          <div class="fg">
-            <label class="fl">📎 Cover Letter Geral — nome do arquivo em /curriculos/ ou /curriculo/</label>
-            <input class="fi ff" id="ccln" value="Roberto Cover_letter.pdf">
-          </div>
         </div>
         <div class="cs">
           <div class="cst"><i class="ti ti-clock"></i>Automação</div>
@@ -591,8 +586,7 @@ async function loadCfg(){
   const c=await api('/api/config');
   document.getElementById('cn').value=c.name||'';
   document.getElementById('ce').value=c.email||'';
-  document.getElementById('cp').value=c.has_password?'tinz pbgb cgmp kxxa
-':'';
+  document.getElementById('cp').value=c.has_password?'••••••••':'';
   document.getElementById('cs2').value=c.smtp_server||'smtp.gmail.com';
   document.getElementById('cport').value=c.smtp_port||587;
   document.getElementById('cph').value=c.phone||'';
