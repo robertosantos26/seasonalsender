@@ -61,6 +61,58 @@ def save_json_file(path, data):
         os.replace(tmp_path, path)
 
 def save_data_store():
+    # Merge with on-disk state to reduce data loss when multiple workers/processes
+    # keep independent in-memory snapshots.
+    disk = load_json_file(APP_DATA_FILE, {"jobs": [], "sent_ids": [], "logs": [], "sent_applications": [], "open_events": []})
+
+    # jobs: keep union by id, prefer in-memory version for same id
+    disk_jobs = {j.get("id"): j for j in disk.get("jobs", []) if j.get("id")}
+    mem_jobs = {j.get("id"): j for j in DATA.get("jobs", []) if j.get("id")}
+    merged_jobs = list(disk_jobs.values())
+    for jid, job in mem_jobs.items():
+        if jid in disk_jobs:
+            disk_jobs[jid].update(job)
+        else:
+            merged_jobs.append(job)
+
+    # sent_ids: set union
+    merged_sent_ids = list(set(disk.get("sent_ids", [])) | set(DATA.get("sent_ids", [])))
+
+    # logs/open events/sent applications: dedupe and cap
+    def _dedupe(items, key_fn, limit):
+        out, seen = [], set()
+        for it in items:
+            k = key_fn(it)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(it)
+            if len(out) >= limit:
+                break
+        return out
+
+    merged_logs = _dedupe(
+        DATA.get("logs", []) + disk.get("logs", []),
+        lambda x: (x.get("time"), x.get("type"), x.get("text")),
+        200
+    )
+    merged_open_events = _dedupe(
+        DATA.get("open_events", []) + disk.get("open_events", []),
+        lambda x: (x.get("token"), x.get("time"), x.get("to")),
+        500
+    )
+    merged_sent_apps = _dedupe(
+        DATA.get("sent_applications", []) + disk.get("sent_applications", []),
+        lambda x: (x.get("tracking_token") or x.get("message_id") or (x.get("job_id"), x.get("to"), x.get("subject"), x.get("sent_at"))),
+        5000
+    )
+
+    DATA["jobs"] = merged_jobs
+    DATA["sent_ids"] = merged_sent_ids
+    DATA["logs"] = merged_logs
+    DATA["open_events"] = merged_open_events
+    DATA["sent_applications"] = merged_sent_apps
+
     save_json_file(APP_DATA_FILE, DATA)
 
 def get_user_config():
