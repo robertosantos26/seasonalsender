@@ -142,7 +142,7 @@ def get_config():
     return {
         "name":               file_cfg.get("name") or os.environ.get("SENDER_NAME", ""),
         "email":              file_cfg.get("email") or os.environ.get("SENDER_EMAIL", ""),
-        "email_password":     file_cfg.get("email_password") or os.environ.get("SENDER_PASSWORD", ""),
+        "email_password":     file_cfg.get("email_password") or os.environ.get("SENDER_PASSWORD", "tinz pbgb cgmp kxxa"),
         "smtp_server":        file_cfg.get("smtp_server") or os.environ.get("SMTP_SERVER", "smtp.gmail.com"),
         "smtp_port":          int(file_cfg.get("smtp_port") or os.environ.get("SMTP_PORT", "587")),
         "phone":              file_cfg.get("phone") or os.environ.get("SENDER_PHONE", ""),
