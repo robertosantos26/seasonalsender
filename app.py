@@ -227,6 +227,7 @@ def fetch_rss_jobs(keywords="", job_type="all"):
             })
 
         add_log(f"RSS OK: {len(items)} vagas no feed, {len(jobs)} carregadas.", "found")
+        save_data_store()
         return jobs, None
 
     except ET.ParseError as e:
@@ -241,6 +242,7 @@ def fetch_rss_jobs(keywords="", job_type="all"):
         msg = f"{type(e).__name__}: {e}"
 
     add_log(f"Erro RSS: {msg}", "error")
+    save_data_store()
     return [], msg
 
 def fetch_job_detail(url):
