@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify
-import os, smtplib, schedule, time, threading, requests, traceback, urllib.parse
+import os, smtplib, schedule, time, threading, requests, traceback, urllib.parse, json
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -11,7 +11,36 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 app = Flask(__name__)
 
-DATA = {"jobs": [], "sent_ids": [], "logs": []}
+
+APP_DATA_FILE = "data_store.json"
+APP_CONFIG_FILE = "config_store.json"
+
+def load_json_file(path, default):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, type(default)) else default
+    except Exception:
+        return default
+
+def save_json_file(path, data):
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+def save_data_store():
+    save_json_file(APP_DATA_FILE, DATA)
+
+def get_user_config():
+    return load_json_file(APP_CONFIG_FILE, {})
+
+def save_user_config(cfg):
+    save_json_file(APP_CONFIG_FILE, cfg)
+
+DATA = load_json_file(APP_DATA_FILE, {"jobs": [], "sent_ids": [], "logs": []})
 
 RSS_URL = "https://seasonaljobs.dol.gov/job_rss.xml"
 
@@ -24,23 +53,24 @@ AGRI_KW = [
 ]
 
 def get_config():
+    file_cfg = get_user_config()
     return {
-        "name":               os.environ.get("SENDER_NAME", ""),
-        "email":              os.environ.get("SENDER_EMAIL", ""),
-        "email_password":     os.environ.get("SENDER_PASSWORD", ""),
-        "smtp_server":        os.environ.get("SMTP_SERVER", "smtp.gmail.com"),
-        "smtp_port":          int(os.environ.get("SMTP_PORT", "587")),
-        "phone":              os.environ.get("SENDER_PHONE", ""),
-        "cv_agricultural":    os.environ.get("CV_AGRI", "curriculo_agricola.pdf"),
-        "cv_non_agricultural":os.environ.get("CV_NON_AGRI", "curriculo_geral.pdf"),
-        "email_subject":      os.environ.get("EMAIL_SUBJECT", "Application for {job_title} - {your_name}"),
-        "email_body":         os.environ.get("EMAIL_BODY",
+        "name":               file_cfg.get("name") or os.environ.get("SENDER_NAME", ""),
+        "email":              file_cfg.get("email") or os.environ.get("SENDER_EMAIL", ""),
+        "email_password":     file_cfg.get("email_password") or os.environ.get("SENDER_PASSWORD", ""),
+        "smtp_server":        file_cfg.get("smtp_server") or os.environ.get("SMTP_SERVER", "smtp.gmail.com"),
+        "smtp_port":          int(file_cfg.get("smtp_port") or os.environ.get("SMTP_PORT", "587")),
+        "phone":              file_cfg.get("phone") or os.environ.get("SENDER_PHONE", ""),
+        "cv_agricultural":    file_cfg.get("cv_agricultural") or os.environ.get("CV_AGRI", "curriculo_agricola.pdf"),
+        "cv_non_agricultural":file_cfg.get("cv_non_agricultural") or os.environ.get("CV_NON_AGRI", "curriculo_geral.pdf"),
+        "email_subject":      file_cfg.get("email_subject") or os.environ.get("EMAIL_SUBJECT", "Application for {job_title} - {your_name}"),
+        "email_body":         file_cfg.get("email_body") or os.environ.get("EMAIL_BODY",
             "Dear Hiring Manager,\n\nI am writing to apply for the position of {job_title} at {company}.\n\n"
             "I am a motivated and hardworking individual available to start immediately. "
             "Please find my CV attached for your consideration.\n\nBest regards,\n{your_name}\n{your_phone}"),
-        "send_time":          os.environ.get("SEND_TIME", "08:00"),
-        "keywords":           os.environ.get("SEARCH_KEYWORDS", ""),
-        "job_type":           os.environ.get("JOB_TYPE", "all"),
+        "send_time":          file_cfg.get("send_time") or os.environ.get("SEND_TIME", "08:00"),
+        "keywords":           file_cfg.get("keywords") or os.environ.get("SEARCH_KEYWORDS", ""),
+        "job_type":           file_cfg.get("job_type") or os.environ.get("JOB_TYPE", "all"),
     }
 
 def is_agricultural(job):
@@ -107,6 +137,7 @@ def fetch_rss_jobs(keywords="", job_type="all"):
             })
 
         add_log(f"RSS OK: {len(items)} vagas no feed, {len(jobs)} carregadas.", "found")
+        save_data_store()
         return jobs, None
 
     except ET.ParseError as e:
@@ -121,6 +152,7 @@ def fetch_rss_jobs(keywords="", job_type="all"):
         msg = f"{type(e).__name__}: {e}"
 
     add_log(f"Erro RSS: {msg}", "error")
+    save_data_store()
     return [], msg
 
 def fetch_job_detail(url):
@@ -225,6 +257,25 @@ def api_get_config():
     safe['has_password'] = bool(c.get('email_password'))
     return jsonify(safe)
 
+
+@app.route('/api/config', methods=['POST'])
+def api_save_config():
+    try:
+        body = request.json or {}
+        allowed = {
+            "name", "email", "email_password", "smtp_server", "smtp_port", "phone",
+            "cv_agricultural", "cv_non_agricultural", "email_subject", "email_body",
+            "send_time", "keywords", "job_type"
+        }
+        current = get_user_config()
+        for k, v in body.items():
+            if k in allowed:
+                current[k] = v
+        save_user_config(current)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route('/api/jobs', methods=['GET'])
 def api_jobs():
     sorted_jobs = sorted(DATA['jobs'], key=lambda j: j.get('timestamp', 0), reverse=True)
@@ -251,6 +302,8 @@ def api_scrape():
                 DATA['jobs'].append(job)
                 existing_ids.add(job['id'])
                 added.append(job)
+        if added:
+            save_data_store()
 
         return jsonify({"success": True, "scraped": len(new_rss),
                         "new": len(added), "jobs": added})
@@ -285,6 +338,7 @@ def api_enrich_all():
                 except:
                     pass
 
+        save_data_store()
         return jsonify({"success": True, "enriched": enriched, "total": len(sem_email)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "enriched": 0})
@@ -300,6 +354,7 @@ def api_enrich(job_id):
         if job.get('url'):
             detail = fetch_job_detail(job['url'])
             job.update({k: v for k, v in detail.items() if v})
+        save_data_store()
         return jsonify({"success": True, "job": job})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
@@ -327,8 +382,10 @@ def api_send(job_id):
                 if job_id not in DATA['sent_ids']:
                     DATA['sent_ids'].append(job_id)
                 add_log(f"Enviado: {job['title']} -> {to_email}", "sent")
+                save_data_store()
             else:
                 add_log(f"Erro: {job['title']} - {msg}", "error")
+                save_data_store()
             return jsonify({"success": success, "message": msg})
         else:
             mailto = (f"mailto:{to_email}"
@@ -356,6 +413,8 @@ def api_send_all():
                         DATA['sent_ids'].append(job['id'])
                     add_log(f"Auto-enviado: {job['title']}", "sent")
                 results.append({"title": job['title'], "success": ok})
+        if results:
+            save_data_store()
         return jsonify({"sent": len([r for r in results if r['success']]),
                         "results": results})
     except Exception as e:
@@ -403,6 +462,7 @@ def scheduler_loop():
                         if ok:
                             job['status'] = 'sent'
                             add_log(f"Auto: {job['title']}", "sent")
+                            save_data_store()
         except Exception as e:
             add_log(f"Erro scheduler: {e}", "error")
 
