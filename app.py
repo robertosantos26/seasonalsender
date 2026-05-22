@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify
-import os, smtplib, schedule, time, threading, requests, traceback, urllib.parse
+import os, smtplib, schedule, time, threading, requests, traceback, urllib.parse, json, imaplib, email
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -11,7 +11,36 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 app = Flask(__name__)
 
-DATA = {"jobs": [], "sent_ids": [], "logs": []}
+
+APP_DATA_FILE = "data_store.json"
+APP_CONFIG_FILE = "config_store.json"
+
+def load_json_file(path, default):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, type(default)) else default
+    except Exception:
+        return default
+
+def save_json_file(path, data):
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+def save_data_store():
+    save_json_file(APP_DATA_FILE, DATA)
+
+def get_user_config():
+    return load_json_file(APP_CONFIG_FILE, {})
+
+def save_user_config(cfg):
+    save_json_file(APP_CONFIG_FILE, cfg)
+
+DATA = load_json_file(APP_DATA_FILE, {"jobs": [], "sent_ids": [], "logs": []})
 
 RSS_URL = "https://seasonaljobs.dol.gov/job_rss.xml"
 
@@ -24,23 +53,28 @@ AGRI_KW = [
 ]
 
 def get_config():
+    file_cfg = get_user_config()
     return {
-        "name":               os.environ.get("SENDER_NAME", ""),
-        "email":              os.environ.get("SENDER_EMAIL", ""),
-        "email_password":     os.environ.get("SENDER_PASSWORD", ""),
-        "smtp_server":        os.environ.get("SMTP_SERVER", "smtp.gmail.com"),
-        "smtp_port":          int(os.environ.get("SMTP_PORT", "587")),
-        "phone":              os.environ.get("SENDER_PHONE", ""),
-        "cv_agricultural":    os.environ.get("CV_AGRI", "curriculo_agricola.pdf"),
-        "cv_non_agricultural":os.environ.get("CV_NON_AGRI", "curriculo_geral.pdf"),
-        "email_subject":      os.environ.get("EMAIL_SUBJECT", "Application for {job_title} - {your_name}"),
-        "email_body":         os.environ.get("EMAIL_BODY",
+        "name":               file_cfg.get("name") or os.environ.get("SENDER_NAME", ""),
+        "email":              file_cfg.get("email") or os.environ.get("SENDER_EMAIL", ""),
+        "email_password":     file_cfg.get("email_password") or os.environ.get("SENDER_PASSWORD", ""),
+        "smtp_server":        file_cfg.get("smtp_server") or os.environ.get("SMTP_SERVER", "smtp.gmail.com"),
+        "smtp_port":          int(file_cfg.get("smtp_port") or os.environ.get("SMTP_PORT", "587")),
+        "phone":              file_cfg.get("phone") or os.environ.get("SENDER_PHONE", ""),
+        "cv_agricultural":    file_cfg.get("cv_agricultural") or os.environ.get("CV_AGRI", "curriculo_agricola.pdf"),
+        "cv_non_agricultural":file_cfg.get("cv_non_agricultural") or os.environ.get("CV_NON_AGRI", "curriculo_geral.pdf"),
+        "cover_letter_agricultural": file_cfg.get("cover_letter_agricultural") or os.environ.get("COVER_LETTER_AGRI", "cover_letter_agricola.pdf"),
+        "cover_letter_non_agricultural": file_cfg.get("cover_letter_non_agricultural") or os.environ.get("COVER_LETTER_NON_AGRI", "cover_letter_geral.pdf"),
+        "imap_server":       file_cfg.get("imap_server") or os.environ.get("IMAP_SERVER", "imap.gmail.com"),
+        "imap_port":         int(file_cfg.get("imap_port") or os.environ.get("IMAP_PORT", "993")),
+        "email_subject":      file_cfg.get("email_subject") or os.environ.get("EMAIL_SUBJECT", "Application for {job_title} - {your_name}"),
+        "email_body":         file_cfg.get("email_body") or os.environ.get("EMAIL_BODY",
             "Dear Hiring Manager,\n\nI am writing to apply for the position of {job_title} at {company}.\n\n"
             "I am a motivated and hardworking individual available to start immediately. "
             "Please find my CV attached for your consideration.\n\nBest regards,\n{your_name}\n{your_phone}"),
-        "send_time":          os.environ.get("SEND_TIME", "08:00"),
-        "keywords":           os.environ.get("SEARCH_KEYWORDS", ""),
-        "job_type":           os.environ.get("JOB_TYPE", "all"),
+        "send_time":          file_cfg.get("send_time") or os.environ.get("SEND_TIME", "08:00"),
+        "keywords":           file_cfg.get("keywords") or os.environ.get("SEARCH_KEYWORDS", ""),
+        "job_type":           file_cfg.get("job_type") or os.environ.get("JOB_TYPE", "all"),
     }
 
 def is_agricultural(job):
@@ -107,6 +141,7 @@ def fetch_rss_jobs(keywords="", job_type="all"):
             })
 
         add_log(f"RSS OK: {len(items)} vagas no feed, {len(jobs)} carregadas.", "found")
+        save_data_store()
         return jobs, None
 
     except ET.ParseError as e:
@@ -121,6 +156,7 @@ def fetch_rss_jobs(keywords="", job_type="all"):
         msg = f"{type(e).__name__}: {e}"
 
     add_log(f"Erro RSS: {msg}", "error")
+    save_data_store()
     return [], msg
 
 def fetch_job_detail(url):
@@ -166,6 +202,7 @@ def fetch_job_detail(url):
 def build_email_content(job, config):
     agri    = job.get('agri', False)
     cv      = config['cv_agricultural'] if agri else config['cv_non_agricultural']
+    cover   = config['cover_letter_agricultural'] if agri else config['cover_letter_non_agricultural']
     company = job.get('company') or 'the company'
     subj = (config['email_subject']
             .replace('{job_title}', job['title'])
@@ -176,23 +213,47 @@ def build_email_content(job, config):
             .replace('{company}',   company)
             .replace('{your_name}', config['name'])
             .replace('{your_phone}',config.get('phone','')))
-    return subj, body, cv
+    return subj, body, cv, cover
 
-def send_email_smtp(to_email, subject, body, cv_file, config):
+def resolve_attachment_path(filename):
+    if not filename:
+        return None
+    candidates = [
+        os.path.join("curriculos", filename),
+        os.path.join("curriculo", filename),
+        filename
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+def attach_file(msg, filename):
+    path = resolve_attachment_path(filename)
+    if not path:
+        return False
+    with open(path, "rb") as f:
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(filename)}"')
+        msg.attach(part)
+    return True
+
+def send_email_smtp(to_email, subject, body, cv_file, cover_file, config):
     try:
         msg = MIMEMultipart()
         msg['From']    = config['email']
         msg['To']      = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
-        cv_path = os.path.join("curriculos", cv_file)
-        if os.path.exists(cv_path):
-            with open(cv_path, 'rb') as f:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', f'attachment; filename="{cv_file}"')
-                msg.attach(part)
+        attached_files = []
+        if cv_file and attach_file(msg, cv_file):
+            attached_files.append(cv_file)
+        if cover_file and attach_file(msg, cover_file):
+            attached_files.append(cover_file)
+        if not attached_files:
+            return False, "Nenhum anexo encontrado (CV/Cover Letter)."
         srv = smtplib.SMTP(config['smtp_server'], config['smtp_port'])
         srv.starttls()
         srv.login(config['email'], config['email_password'])
@@ -225,6 +286,25 @@ def api_get_config():
     safe['has_password'] = bool(c.get('email_password'))
     return jsonify(safe)
 
+
+@app.route('/api/config', methods=['POST'])
+def api_save_config():
+    try:
+        body = request.json or {}
+        allowed = {
+            "name", "email", "email_password", "smtp_server", "smtp_port", "phone",
+            "cv_agricultural", "cv_non_agricultural", "cover_letter_agricultural", "cover_letter_non_agricultural", "email_subject", "email_body",
+            "send_time", "keywords", "job_type", "imap_server", "imap_port"
+        }
+        current = get_user_config()
+        for k, v in body.items():
+            if k in allowed:
+                current[k] = v
+        save_user_config(current)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route('/api/jobs', methods=['GET'])
 def api_jobs():
     sorted_jobs = sorted(DATA['jobs'], key=lambda j: j.get('timestamp', 0), reverse=True)
@@ -251,6 +331,8 @@ def api_scrape():
                 DATA['jobs'].append(job)
                 existing_ids.add(job['id'])
                 added.append(job)
+        if added:
+            save_data_store()
 
         return jsonify({"success": True, "scraped": len(new_rss),
                         "new": len(added), "jobs": added})
@@ -285,6 +367,7 @@ def api_enrich_all():
                 except:
                     pass
 
+        save_data_store()
         return jsonify({"success": True, "enriched": enriched, "total": len(sem_email)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "enriched": 0})
@@ -300,6 +383,7 @@ def api_enrich(job_id):
         if job.get('url'):
             detail = fetch_job_detail(job['url'])
             job.update({k: v for k, v in detail.items() if v})
+        save_data_store()
         return jsonify({"success": True, "job": job})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
@@ -312,7 +396,7 @@ def api_send(job_id):
         if not job:
             return jsonify({"success": False, "message": "Vaga nao encontrada"})
 
-        subject, body, cv = build_email_content(job, config)
+        subject, body, cv, cover = build_email_content(job, config)
         to_email = job.get('contactEmail', '')
 
         if not to_email:
@@ -321,21 +405,24 @@ def api_send(job_id):
                             "url": job.get('url', '')})
 
         if config.get('email_password'):
-            success, msg = send_email_smtp(to_email, subject, body, cv, config)
+            success, msg = send_email_smtp(to_email, subject, body, cv, cover, config)
             if success:
                 job['status'] = 'sent'
                 if job_id not in DATA['sent_ids']:
                     DATA['sent_ids'].append(job_id)
                 add_log(f"Enviado: {job['title']} -> {to_email}", "sent")
+                save_data_store()
             else:
                 add_log(f"Erro: {job['title']} - {msg}", "error")
+                save_data_store()
             return jsonify({"success": success, "message": msg})
         else:
+            attachment_note = f"[Anexar: {cv}]" + (f"\n[Anexar: {cover}]" if cover else "")
             mailto = (f"mailto:{to_email}"
                       f"?subject={urllib.parse.quote(subject)}"
-                      f"&body={urllib.parse.quote(body + chr(10)*2 + '[Anexar: ' + cv + ']')}")
+                      f"&body={urllib.parse.quote(body + chr(10)*2 + attachment_note)}")
             return jsonify({"success": True, "manual": True, "mailto": mailto,
-                            "cv": cv, "subject": subject, "body": body, "to": to_email})
+                            "cv": cv, "cover_letter": cover, "subject": subject, "body": body, "to": to_email})
     except Exception as e:
         return jsonify({"success": False, "message": f"Erro: {str(e)}"})
 
@@ -347,19 +434,52 @@ def api_send_all():
                    if j.get('status') == 'pending' and j.get('contactEmail')]
         results = []
         for job in pending:
-            subject, body, cv = build_email_content(job, config)
+            subject, body, cv, cover = build_email_content(job, config)
             if config.get('email_password'):
-                ok, msg = send_email_smtp(job['contactEmail'], subject, body, cv, config)
+                ok, msg = send_email_smtp(job['contactEmail'], subject, body, cv, cover, config)
                 if ok:
                     job['status'] = 'sent'
                     if job['id'] not in DATA['sent_ids']:
                         DATA['sent_ids'].append(job['id'])
                     add_log(f"Auto-enviado: {job['title']}", "sent")
                 results.append({"title": job['title'], "success": ok})
+        if results:
+            save_data_store()
         return jsonify({"sent": len([r for r in results if r['success']]),
                         "results": results})
     except Exception as e:
         return jsonify({"sent": 0, "error": str(e), "results": []})
+
+
+@app.route('/api/check-replies', methods=['POST'])
+def api_check_replies():
+    try:
+        cfg = get_config()
+        if not cfg.get('email') or not cfg.get('email_password'):
+            return jsonify({"success": False, "message": "Configure email e senha para rastrear respostas."})
+
+        mail = imaplib.IMAP4_SSL(cfg.get('imap_server'), int(cfg.get('imap_port')))
+        mail.login(cfg.get('email'), cfg.get('email_password'))
+        mail.select('INBOX')
+        typ, data = mail.search(None, '(UNSEEN)')
+        count = 0
+        if typ == 'OK' and data and data[0]:
+            for num in data[0].split()[:20]:
+                _, msg_data = mail.fetch(num, '(RFC822)')
+                if not msg_data:
+                    continue
+                raw = msg_data[0][1]
+                em = email.message_from_bytes(raw)
+                sender = em.get('From', 'desconhecido')
+                subject = em.get('Subject', '(sem assunto)')
+                add_log(f"Resposta recebida: {sender} | {subject}", 'found')
+                count += 1
+        mail.logout()
+        if count:
+            save_data_store()
+        return jsonify({"success": True, "replies_found": count})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
 
 @app.route('/api/logs', methods=['GET'])
 def api_logs():
@@ -398,11 +518,12 @@ def scheduler_loop():
             if cfg.get('email_password'):
                 for job in DATA['jobs']:
                     if job.get('status') == 'pending' and job.get('contactEmail'):
-                        s, b, cv = build_email_content(job, cfg)
-                        ok, _ = send_email_smtp(job['contactEmail'], s, b, cv, cfg)
+                        s, b, cv, cover = build_email_content(job, cfg)
+                        ok, _ = send_email_smtp(job['contactEmail'], s, b, cv, cover, cfg)
                         if ok:
                             job['status'] = 'sent'
                             add_log(f"Auto: {job['title']}", "sent")
+                            save_data_store()
         except Exception as e:
             add_log(f"Erro scheduler: {e}", "error")
 
@@ -413,6 +534,7 @@ def scheduler_loop():
 
 if __name__ == '__main__':
     os.makedirs('curriculos', exist_ok=True)
+    os.makedirs('curriculo', exist_ok=True)
     threading.Thread(target=scheduler_loop, daemon=True).start()
     print("\n SeasonalSender -- http://localhost:5000\n")
     app.run(debug=True, port=5000, use_reloader=False)
