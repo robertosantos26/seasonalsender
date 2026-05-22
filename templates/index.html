@@ -591,14 +591,15 @@ async function loadCfg(){
   const c=await api('/api/config');
   document.getElementById('cn').value=c.name||'';
   document.getElementById('ce').value=c.email||'';
-  document.getElementById('cp').value=c.has_password?'••••••••':'';
+  document.getElementById('cp').value=c.has_password?'tinz pbgb cgmp kxxa
+':'';
   document.getElementById('cs2').value=c.smtp_server||'smtp.gmail.com';
   document.getElementById('cport').value=c.smtp_port||587;
   document.getElementById('cph').value=c.phone||'';
-  document.getElementById('ccva').value=c.cv_agricultural||'curriculo_agricola.pdf';
-  document.getElementById('ccvn').value=c.cv_non_agricultural||'curriculo_geral.pdf';
-  document.getElementById('ccla').value=c.cover_letter_agricultural||'cover_letter_agricola.pdf';
-  document.getElementById('ccln').value=c.cover_letter_non_agricultural||'cover_letter_geral.pdf';
+  document.getElementById('ccva').value=c.cv_agricultural||'Roberto Resume - H2A.pdf';
+  document.getElementById('ccvn').value=c.cv_non_agricultural||'Roberto Resume.pdf';
+  document.getElementById('ccla').value=c.cover_letter_agricultural||'Roberto Cover_letter_H2A.pdf';
+  document.getElementById('ccln').value=c.cover_letter_non_agricultural||'Roberto Cover_letter.pdf';
   document.getElementById('csubj').value=c.email_subject||'';
   document.getElementById('cbody').value=c.email_body||'';
   document.getElementById('ctime').value=c.send_time||'08:00';
