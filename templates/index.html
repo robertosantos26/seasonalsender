@@ -392,7 +392,7 @@ function renderJobs(jobs){
         ${j.contactEmail?`<button class="btn bp bsm" onclick="sendOne('${j.id}')"><i class="ti ti-send"></i> Enviar Email</button>`:''}
         ${j.contactEmail?`<button class="btn bo bsm" onclick="previewEmail('${j.id}')"><i class="ti ti-eye"></i> Ver Email</button>`:''}
         <a href="${j.url}" target="_blank" class="btn bo bsm"><i class="ti ti-external-link"></i> Ver Vaga DOL</a>
-        ${!j.contactEmail&&!j.contactPhone?`<button class="btn bo bsm" onclick="enrichJob('${j.id}',this)"><i class="ti ti-refresh"></i> Carregar Contato</button>`:''}
+        ${(!j.contactEmail||!j.salary)?`<button class="btn bo bsm" onclick="enrichJob('${j.id}',this)"><i class="ti ti-refresh"></i> Carregar Contato</button>`:''}
         <span style="margin-left:auto" class="${j.status==='sent'?'bse':'bpe'}">${j.status==='sent'?'✓ Enviado':'⏳ Pendente'}</span>
       </div>
     </div>`).join('');
@@ -546,9 +546,8 @@ async function doScan(){
     setTimeout(async()=>{
       closeScan();
       await loadJobs();loadStats();loadLogs();
-      const msg = r.new>0?`${r.new} novas vagas carregadas! Carregando contatos...`:'Nenhuma vaga nova.';
+      const msg = r.new>0?`${r.new} novas vagas carregadas! Clique em \"Carregar Contato\" para buscar email e salário.`:'Nenhuma vaga nova.';
       toast(msg);
-      if(r.new>0) autoEnrichAll();
     },800);
   }catch(e){
     clearInterval(iv);
