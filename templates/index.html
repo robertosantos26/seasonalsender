@@ -119,6 +119,7 @@ select option{background:#1a1d2e}
     <div class="pill"><div class="dot"></div><span id="status-text">Conectado ao DOL.GOV</span></div>
     <button class="btn bo bsm" onclick="openScan()"><i class="ti ti-refresh"></i> Buscar Vagas</button>
     <button class="btn bp bsm" onclick="sendAll()"><i class="ti ti-send"></i> Enviar Pendentes</button>
+    <button class="btn bo bsm" onclick="checkReplies()"><i class="ti ti-mail-search"></i> Ver Respostas</button>
   </div>
 </div>
 
@@ -204,6 +205,10 @@ select option{background:#1a1d2e}
           <div class="fg"><label class="fl">Servidor SMTP</label><input class="fi ff" id="cs2" value="smtp.gmail.com"></div>
           <div class="fg"><label class="fl">Porta SMTP</label><input class="fi ff" id="cport" value="587" type="number"></div>
           <div class="fg"><label class="fl">Telefone / WhatsApp</label><input class="fi ff" id="cph" placeholder="+55 54 99999-9999"></div>
+          <div class="fg">
+            <label class="fl">📎 Cover Letter Geral — nome do arquivo em /curriculos/ ou /curriculo/</label>
+            <input class="fi ff" id="ccln" value="cover_letter_geral.pdf">
+          </div>
         </div>
         <div class="cs">
           <div class="cst"><i class="ti ti-clock"></i>Automação</div>
@@ -235,8 +240,12 @@ select option{background:#1a1d2e}
             <div style="font-size:11px;color:#555;margin-top:3px">Para: hospitality, landscaping, forestry, housekeeping...</div>
           </div>
           <div class="fg">
-            <label class="fl">📎 Cover Letter — nome do arquivo em /curriculos/ ou /curriculo/</label>
-            <input class="fi ff" id="ccl" value="cover_letter.pdf">
+            <label class="fl">📎 Cover Letter Agrícola — nome do arquivo em /curriculos/ ou /curriculo/</label>
+            <input class="fi ff" id="ccla" value="cover_letter_agricola.pdf">
+          </div>
+          <div class="fg">
+            <label class="fl">📎 Cover Letter Geral — nome do arquivo em /curriculos/ ou /curriculo/</label>
+            <input class="fi ff" id="ccln" value="cover_letter_geral.pdf">
           </div>
         </div>
         <div class="cs">
@@ -561,6 +570,17 @@ async function doScan(){
   }
 }
 
+
+async function checkReplies(){
+  const r=await api('/api/check-replies','POST');
+  if(r.success){
+    toast(`Verificação concluída: ${r.replies_found||0} novas respostas.`);
+    loadLogs();
+  } else {
+    toast(r.message||'Não foi possível verificar respostas.', false);
+  }
+}
+
 async function loadCfg(){
   const c=await api('/api/config');
   document.getElementById('cn').value=c.name||'';
@@ -571,7 +591,8 @@ async function loadCfg(){
   document.getElementById('cph').value=c.phone||'';
   document.getElementById('ccva').value=c.cv_agricultural||'curriculo_agricola.pdf';
   document.getElementById('ccvn').value=c.cv_non_agricultural||'curriculo_geral.pdf';
-  document.getElementById('ccl').value=c.cover_letter||'cover_letter.pdf';
+  document.getElementById('ccla').value=c.cover_letter_agricultural||'cover_letter_agricola.pdf';
+  document.getElementById('ccln').value=c.cover_letter_non_agricultural||'cover_letter_geral.pdf';
   document.getElementById('csubj').value=c.email_subject||'';
   document.getElementById('cbody').value=c.email_body||'';
   document.getElementById('ctime').value=c.send_time||'08:00';
@@ -590,7 +611,8 @@ async function saveCfg(){
     phone:document.getElementById('cph').value,
     cv_agricultural:document.getElementById('ccva').value,
     cv_non_agricultural:document.getElementById('ccvn').value,
-    cover_letter:document.getElementById('ccl').value,
+    cover_letter_agricultural:document.getElementById('ccla').value,
+    cover_letter_non_agricultural:document.getElementById('ccln').value,
     email_subject:document.getElementById('csubj').value,
     email_body:document.getElementById('cbody').value,
     send_time:document.getElementById('ctime').value,
