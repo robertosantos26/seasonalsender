@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: seasonalsender
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2
+    envVars:
+      - key: SENDER_NAME
+        value: Seu Nome Aqui
+      - key: SENDER_EMAIL
+        value: seuemail@gmail.com
+      - key: SENDER_PASSWORD
+        sync: false        # preencher manualmente no painel do Render (seguro)
+      - key: SMTP_SERVER
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SENDER_PHONE
+        value: "+55 54 99999-9999"
+      - key: CV_AGRI
+        value: curriculo_agricola.pdf
+      - key: CV_NON_AGRI
+        value: curriculo_geral.pdf
+      - key: EMAIL_SUBJECT
+        value: "Application for {job_title} - {your_name}"
+      - key: EMAIL_BODY
+        value: "Dear Hiring Manager,\n\nI am writing to apply for the position of {job_title} at {company}.\n\nI am a motivated and hardworking individual, available to start immediately. Please find my CV attached.\n\nBest regards,\n{your_name}\n{your_phone}"
+      - key: SEND_TIME
+        value: "08:00"
+      - key: SEARCH_KEYWORDS
+        value: "farm, harvest, picking, seasonal, hospitality"
+      - key: SEARCH_COUNTRIES
+        value: "United Kingdom"
