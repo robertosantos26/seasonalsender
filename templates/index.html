@@ -234,6 +234,10 @@ select option{background:#1a1d2e}
             <input class="fi ff" id="ccvn" value="curriculo_geral.pdf">
             <div style="font-size:11px;color:#555;margin-top:3px">Para: hospitality, landscaping, forestry, housekeeping...</div>
           </div>
+          <div class="fg">
+            <label class="fl">📎 Cover Letter — nome do arquivo em /curriculos/ ou /curriculo/</label>
+            <input class="fi ff" id="ccl" value="cover_letter.pdf">
+          </div>
         </div>
         <div class="cs">
           <div class="cst"><i class="ti ti-mail"></i>Modelo de Email</div>
@@ -460,6 +464,7 @@ async function previewEmail(jobId){
         </div>
         <div class="epb">${r.body}</div>
         <div class="epa"><i class="ti ti-paperclip"></i>${r.cv} <span style="color:#555">(${job.agri?'Currículo Agrícola H-2A':'Currículo Geral H-2B'})</span></div>
+        ${r.cover_letter?`<div class="epa"><i class="ti ti-file-description"></i>${r.cover_letter} <span style="color:#555">(Cover Letter)</span></div>`:''}
       </div>`;
     document.getElementById('em-send').onclick=()=>{window.open(r.mailto);closeEmail();loadJobs();loadStats();loadLogs();};
   }
@@ -566,6 +571,7 @@ async function loadCfg(){
   document.getElementById('cph').value=c.phone||'';
   document.getElementById('ccva').value=c.cv_agricultural||'curriculo_agricola.pdf';
   document.getElementById('ccvn').value=c.cv_non_agricultural||'curriculo_geral.pdf';
+  document.getElementById('ccl').value=c.cover_letter||'cover_letter.pdf';
   document.getElementById('csubj').value=c.email_subject||'';
   document.getElementById('cbody').value=c.email_body||'';
   document.getElementById('ctime').value=c.send_time||'08:00';
@@ -584,6 +590,7 @@ async function saveCfg(){
     phone:document.getElementById('cph').value,
     cv_agricultural:document.getElementById('ccva').value,
     cv_non_agricultural:document.getElementById('ccvn').value,
+    cover_letter:document.getElementById('ccl').value,
     email_subject:document.getElementById('csubj').value,
     email_body:document.getElementById('cbody').value,
     send_time:document.getElementById('ctime').value,

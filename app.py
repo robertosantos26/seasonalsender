@@ -63,6 +63,7 @@ def get_config():
         "phone":              file_cfg.get("phone") or os.environ.get("SENDER_PHONE", ""),
         "cv_agricultural":    file_cfg.get("cv_agricultural") or os.environ.get("CV_AGRI", "curriculo_agricola.pdf"),
         "cv_non_agricultural":file_cfg.get("cv_non_agricultural") or os.environ.get("CV_NON_AGRI", "curriculo_geral.pdf"),
+        "cover_letter":      file_cfg.get("cover_letter") or os.environ.get("COVER_LETTER", "cover_letter.pdf"),
         "email_subject":      file_cfg.get("email_subject") or os.environ.get("EMAIL_SUBJECT", "Application for {job_title} - {your_name}"),
         "email_body":         file_cfg.get("email_body") or os.environ.get("EMAIL_BODY",
             "Dear Hiring Manager,\n\nI am writing to apply for the position of {job_title} at {company}.\n\n"
@@ -210,6 +211,31 @@ def build_email_content(job, config):
             .replace('{your_phone}',config.get('phone','')))
     return subj, body, cv
 
+def resolve_attachment_path(filename):
+    if not filename:
+        return None
+    candidates = [
+        os.path.join("curriculos", filename),
+        os.path.join("curriculo", filename),
+        filename
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+def attach_file(msg, filename):
+    path = resolve_attachment_path(filename)
+    if not path:
+        return False
+    with open(path, "rb") as f:
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(filename)}"')
+        msg.attach(part)
+    return True
+
 def send_email_smtp(to_email, subject, body, cv_file, config):
     try:
         msg = MIMEMultipart()
@@ -217,14 +243,14 @@ def send_email_smtp(to_email, subject, body, cv_file, config):
         msg['To']      = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
-        cv_path = os.path.join("curriculos", cv_file)
-        if os.path.exists(cv_path):
-            with open(cv_path, 'rb') as f:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', f'attachment; filename="{cv_file}"')
-                msg.attach(part)
+        attached_files = []
+        if cv_file and attach_file(msg, cv_file):
+            attached_files.append(cv_file)
+        cover_letter = config.get("cover_letter", "")
+        if cover_letter and attach_file(msg, cover_letter):
+            attached_files.append(cover_letter)
+        if not attached_files:
+            return False, "Nenhum anexo encontrado (CV/Cover Letter)."
         srv = smtplib.SMTP(config['smtp_server'], config['smtp_port'])
         srv.starttls()
         srv.login(config['email'], config['email_password'])
@@ -264,7 +290,7 @@ def api_save_config():
         body = request.json or {}
         allowed = {
             "name", "email", "email_password", "smtp_server", "smtp_port", "phone",
-            "cv_agricultural", "cv_non_agricultural", "email_subject", "email_body",
+            "cv_agricultural", "cv_non_agricultural", "cover_letter", "email_subject", "email_body",
             "send_time", "keywords", "job_type"
         }
         current = get_user_config()
@@ -388,11 +414,13 @@ def api_send(job_id):
                 save_data_store()
             return jsonify({"success": success, "message": msg})
         else:
+            cover = config.get("cover_letter", "")
+            attachment_note = f"[Anexar: {cv}]" + (f"\n[Anexar: {cover}]" if cover else "")
             mailto = (f"mailto:{to_email}"
                       f"?subject={urllib.parse.quote(subject)}"
-                      f"&body={urllib.parse.quote(body + chr(10)*2 + '[Anexar: ' + cv + ']')}")
+                      f"&body={urllib.parse.quote(body + chr(10)*2 + attachment_note)}")
             return jsonify({"success": True, "manual": True, "mailto": mailto,
-                            "cv": cv, "subject": subject, "body": body, "to": to_email})
+                            "cv": cv, "cover_letter": config.get("cover_letter", ""), "subject": subject, "body": body, "to": to_email})
     except Exception as e:
         return jsonify({"success": False, "message": f"Erro: {str(e)}"})
 
@@ -473,6 +501,7 @@ def scheduler_loop():
 
 if __name__ == '__main__':
     os.makedirs('curriculos', exist_ok=True)
+    os.makedirs('curriculo', exist_ok=True)
     threading.Thread(target=scheduler_loop, daemon=True).start()
     print("\n SeasonalSender -- http://localhost:5000\n")
     app.run(debug=True, port=5000, use_reloader=False)
