@@ -1,0 +1,201 @@
+name: Enable SMTP from panel
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: !contains(github.event.head_commit.message, '[smtp-panel]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch application
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          app = Path('app.py')
+          s = app.read_text(encoding='utf-8')
+
+          start = s.index('def send_email_smtp(')
+          end = s.index('# ── Envio automático escalonado', start)
+
+          new_func = r'''def send_email_smtp(to_email, subject, body, cv_file, config, cover_letter_file="", tracking_id=None):
+              """Envia diretamente pelo SMTP configurado no painel; usa o relay antigo como fallback."""
+              sender_email = (config.get("email") or "").strip()
+              sender_name = config.get("name", "SeasonalSender") or "SeasonalSender"
+              password = config.get("email_password", "") or ""
+              smtp_server = (config.get("smtp_server") or "smtp.gmail.com").strip()
+              try:
+                  smtp_port = int(config.get("smtp_port") or 587)
+              except Exception:
+                  smtp_port = 587
+
+              if not sender_email:
+                  return False, "Email não configurado em Configurações."
+
+              html_body = body.replace("\\n", "<br>")
+              base_url = get_base_url(config)
+              if tracking_id and base_url:
+                  html_body += f'<img src="{base_url}/api/track/{tracking_id}.gif" width="1" height="1" style="display:none" alt="">'
+
+              # Caminho principal: SMTP configurado diretamente pelo painel.
+              if password:
+                  msg = MIMEMultipart()
+                  msg["From"] = f"{sender_name} <{sender_email}>"
+                  msg["To"] = to_email
+                  msg["Subject"] = subject
+                  msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+                  for fname in [cv_file, cover_letter_file]:
+                      if not fname:
+                          continue
+                      path = os.path.join("curriculos", fname)
+                      if os.path.exists(path):
+                          try:
+                              with open(path, "rb") as f:
+                                  part = MIMEBase("application", "octet-stream")
+                                  part.set_payload(f.read())
+                              encoders.encode_base64(part)
+                              part.add_header("Content-Disposition", "attachment", filename=fname)
+                              msg.attach(part)
+                          except Exception as e:
+                              return False, f"Erro no anexo {fname}: {e}"
+
+                  try:
+                      if smtp_port == 465:
+                          with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=20) as server:
+                              server.login(sender_email, password)
+                              server.sendmail(sender_email, [to_email], msg.as_string())
+                      else:
+                          with smtplib.SMTP(smtp_server, smtp_port, timeout=20) as server:
+                              server.ehlo()
+                              server.starttls()
+                              server.ehlo()
+                              server.login(sender_email, password)
+                              server.sendmail(sender_email, [to_email], msg.as_string())
+                      return True, "Enviado via SMTP"
+                  except Exception as e:
+                      return False, f"SMTP: {e}"
+
+              # Compatibilidade: se ainda não houver senha no painel, usa o relay antigo.
+              gas_url = os.environ.get("GAS_WEBHOOK_URL", "")
+              if not gas_url:
+                  return False, "Configure o email e a senha SMTP em Configurações."
+
+              payload = {
+                  "to": to_email,
+                  "subject": subject,
+                  "body": body,
+                  "html_body": html_body,
+                  "bcc": sender_email,
+                  "sender_name": sender_name,
+              }
+              attachments = []
+              for fname in [cv_file, cover_letter_file]:
+                  if fname:
+                      data = read_attachment("curriculos", fname)
+                      if data:
+                          attachments.append({"filename": fname, "content": data})
+              if attachments:
+                  payload["attachments"] = attachments
+
+              try:
+                  resp = requests.post(gas_url, json=payload, timeout=20)
+                  data = resp.json() if resp.content else {}
+                  if data.get("ok"):
+                      return True, "Enviado via relay"
+                  return False, data.get("message", f"Erro {resp.status_code}")
+              except Exception as e:
+                  return False, str(e)
+
+          '''
+          s = s[:start] + new_func + s[end:]
+
+          marker = '@app.route("/api/config", methods=["GET"])'
+          test_route = r'''@app.route("/api/test-email", methods=["POST"])
+          def api_test_email():
+              """Testa as configurações SMTP salvas no painel enviando para o próprio remetente."""
+              try:
+                  config = load_config()
+                  to_email = (config.get("email") or "").strip()
+                  password = config.get("email_password") or ""
+                  if not to_email or not password:
+                      return jsonify({"success": False, "message": "Salve o email e a senha SMTP em Configurações antes de testar."})
+                  subject = "SeasonalSender — teste de configuração"
+                  body = (
+                      "Olá!\n\n"
+                      "Este é um email de teste do SeasonalSender.\n"
+                      "Se você recebeu esta mensagem, o SMTP configurado no painel está funcionando.\n\n"
+                      "SeasonalSender"
+                  )
+                  success, msg = send_email_smtp(to_email, subject, body, "", config, "")
+                  if success:
+                      add_log(f"✓ Teste SMTP enviado para {to_email}", "sent")
+                  else:
+                      add_log(f"✗ Teste SMTP falhou: {msg}", "error")
+                  return jsonify({"success": success, "message": msg, "to": to_email})
+              except Exception as e:
+                  return jsonify({"success": False, "message": str(e)})
+
+          '''
+          if '@app.route("/api/test-email"' not in s:
+              s = s.replace(marker, test_route + marker, 1)
+
+          old_relay = '''    if not os.environ.get("GAS_WEBHOOK_URL"):
+          status["relay"] = "❌ GAS_WEBHOOK_URL não configurada (necessária para enviar)"
+'''
+          s = s.replace(old_relay, '', 1)
+
+          app.write_text(s, encoding='utf-8')
+
+          html = Path('templates/index.html')
+          h = html.read_text(encoding='utf-8')
+
+          js_marker = 'async function saveCfg(){'
+          test_js = r'''async function testEmail(){
+            const btn=document.getElementById('btn-test-email');
+            btn.disabled=true;
+            btn.innerHTML='<div class="spinner"></div> Testando...';
+            try{
+              await saveCfg(true);
+              const r=await api('/api/test-email','POST');
+              toast(r.success ? `Teste enviado para ${r.to}` : `Falha no teste: ${r.message}`, r.success);
+            }catch(e){
+              toast('Erro ao testar email: '+e.message, false);
+            }finally{
+              btn.disabled=false;
+              btn.innerHTML='<i class="ti ti-mail-check"></i> Testar Email';
+            }
+          }
+
+          '''
+          if 'async function testEmail()' not in h:
+              h = h.replace(js_marker, test_js + js_marker, 1)
+
+          h = h.replace('async function saveCfg(){', 'async function saveCfg(silent=false){', 1)
+          h = h.replace("  toast('Configurações salvas!');", "  if(!silent) toast('Configurações salvas!');", 1)
+
+          old_btn = '<button class="btn bs" style="width:100%" onclick="saveCfg()"><i class="ti ti-check"></i> Salvar Configurações</button>'
+          new_btn = '''<div style="display:flex;gap:10px;margin-top:0">
+            <button class="btn bs" style="flex:1" onclick="saveCfg()"><i class="ti ti-check"></i> Salvar Configurações</button>
+            <button class="btn bp" id="btn-test-email" style="flex:0 0 auto" onclick="testEmail()"><i class="ti ti-mail-check"></i> Testar Email</button>
+          </div>'''
+          if old_btn in h:
+              h = h.replace(old_btn, new_btn, 1)
+
+          html.write_text(h, encoding='utf-8')
+          PY
+
+      - name: Commit patched files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py templates/index.html
+          git diff --cached --quiet || git commit -m "Enable SMTP settings from panel [smtp-panel]"
+          git push
