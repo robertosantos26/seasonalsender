@@ -9,21 +9,23 @@ permissions:
 
 jobs:
   patch:
-    if: ${{ !contains(github.event.head_commit.message, '[smtp-panel]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Skip bot-generated commit
+        if: ${{ contains(github.event.head_commit.message, '[smtp-panel]') }}
+        run: echo "Already patched; nothing to do."
+
       - name: Patch application
+        if: ${{ !contains(github.event.head_commit.message, '[smtp-panel]') }}
         run: |
           python - <<'PY'
           from pathlib import Path
-
           app = Path('app.py')
           s = app.read_text(encoding='utf-8')
           start = s.index('def send_email_smtp(')
           end = s.index('# ── Envio automático escalonado', start)
-
           new_func = r'''def send_email_smtp(to_email, subject, body, cv_file, config, cover_letter_file="", tracking_id=None):
               """Envia diretamente pelo SMTP configurado no painel; usa o relay antigo como fallback."""
               sender_email = (config.get("email") or "").strip()
@@ -99,7 +101,6 @@ jobs:
 
           '''
           s = s[:start] + new_func + s[end:]
-
           marker = '@app.route("/api/config", methods=["GET"])'
           test_route = r'''@app.route("/api/test-email", methods=["POST"])
           def api_test_email():
@@ -159,6 +160,7 @@ jobs:
           PY
 
       - name: Commit patched files
+        if: ${{ !contains(github.event.head_commit.message, '[smtp-panel]') }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
