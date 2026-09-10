@@ -36,7 +36,7 @@ jobs:
                   smtp_port = 587
               if not sender_email:
                   return False, "Email não configurado em Configurações."
-              html_body = body.replace("\\n", "<br>")
+              html_body = body.replace(chr(10), "<br>")
               base_url = get_base_url(config)
               if tracking_id and base_url:
                   html_body += f'<img src="{base_url}/api/track/{tracking_id}.gif" width="1" height="1" style="display:none" alt="">'
@@ -110,9 +110,8 @@ jobs:
                   password = config.get("email_password") or ""
                   if not to_email or not password:
                       return jsonify({"success": False, "message": "Salve o email e a senha SMTP em Configurações antes de testar."})
-                  success, msg = send_email_smtp(to_email, "SeasonalSender — teste de configuração",
-                      "Olá!\\n\\nEste é um email de teste do SeasonalSender.\\nSe você recebeu esta mensagem, o SMTP configurado no painel está funcionando.\\n\\nSeasonalSender",
-                      "", config, "")
+                  body = "Olá!" + chr(10) + chr(10) + "Este é um email de teste do SeasonalSender." + chr(10) + "Se você recebeu esta mensagem, o SMTP configurado no painel está funcionando." + chr(10) + chr(10) + "SeasonalSender"
+                  success, msg = send_email_smtp(to_email, "SeasonalSender — teste de configuração", body, "", config, "")
                   if success:
                       add_log(f"✓ Teste SMTP enviado para {to_email}", "sent")
                   else:
