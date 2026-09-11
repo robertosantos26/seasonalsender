@@ -438,15 +438,8 @@ async function uploadCategoryFile(input, catId, kind, i){
     const d = await r.json();
     if(d.success){
   categories[i][kind] = d.filename;
-
-  statusEl.innerHTML =
-    `📎 ${kind==='cv' ? 'Currículo' : 'Cover letter'} salvo: <strong>${d.filename}</strong>`;
-
-  statusEl.style.background = '#14532d22';
-  statusEl.style.border = '1px solid #22c55e44';
-  statusEl.style.color = '#22c55e';
-
-  toast('Arquivo salvo com sucesso!');
+  statusEl.textContent = 'Atual: ' + d.filename;
+  toast('Arquivo enviado!');
 } else {
       statusEl.textContent = 'Erro: ' + (d.message||'falha no envio');
       toast(d.message||'Erro ao enviar arquivo', false);
