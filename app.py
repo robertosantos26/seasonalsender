@@ -581,43 +581,130 @@ def api_save_web_config():
 
 @app.route("/api/upload-curriculo", methods=["POST"])
 def api_upload_curriculo():
-    """Recebe um PDF pela página (currículo ou cover letter) e salva no banco, por categoria."""
+    """Salva currículo/cover letter na tabela attachments."""
     try:
         file = request.files.get("file")
         cat_id = (request.form.get("category") or "").strip()
         kind = (request.form.get("kind") or "cv").strip()
 
         if not file or not file.filename:
-            return jsonify({"success": False, "message": "Nenhum arquivo enviado"})
+            return jsonify({
+                "success": False,
+                "message": "Nenhum arquivo enviado"
+            })
+
         if not file.filename.lower().endswith(".pdf"):
-            return jsonify({"success": False, "message": "Envie um arquivo PDF"})
+            return jsonify({
+                "success": False,
+                "message": "Envie um arquivo PDF"
+            })
+
         if kind not in ("cv", "cover_letter"):
-            return jsonify({"success": False, "message": "Tipo de arquivo inválido"})
+            return jsonify({
+                "success": False,
+                "message": "Tipo de arquivo inválido"
+            })
+
         if not cat_id:
-            return jsonify({"success": False, "message": "Categoria não informada"})
+            return jsonify({
+                "success": False,
+                "message": "Categoria não informada"
+            })
 
         raw = file.read()
+
         if not raw:
-            return jsonify({"success": False, "message": "Arquivo vazio"})
+            return jsonify({
+                "success": False,
+                "message": "Arquivo vazio"
+            })
+
         if len(raw) > 8 * 1024 * 1024:
-            return jsonify({"success": False, "message": "Arquivo muito grande (máx. 8MB)"})
+            return jsonify({
+                "success": False,
+                "message": "Arquivo muito grande (máx. 8MB)"
+            })
 
         config = load_config()
         cats = config.get("categories") or DEFAULT_CATEGORIES
-        target = next((c for c in cats if c.get("id") == cat_id), None)
+
+        target = next(
+            (c for c in cats if c.get("id") == cat_id),
+            None
+        )
+
         if not target:
-            return jsonify({"success": False, "message": "Categoria não encontrada"})
+            return jsonify({
+                "success": False,
+                "message": "Categoria não encontrada"
+            })
 
         fname = f"{cat_id}_{kind}.pdf"
+
+        # Salva o arquivo REAL na tabela attachments
+        db_query("""
+            INSERT INTO attachments
+                (id, category, kind, filename, content, content_type)
+            VALUES
+                (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (category, kind)
+            DO UPDATE SET
+                filename = EXCLUDED.filename,
+                content = EXCLUDED.content,
+                content_type = EXCLUDED.content_type,
+                created_at = NOW()
+        """, (
+            str(uuid.uuid4()),
+            cat_id,
+            kind,
+            fname,
+            psycopg2.Binary(raw),
+            "application/pdf"
+        ))
+
+        # Mantém somente o nome na configuração
         target[kind] = fname
-        target[f"{kind}_data"] = base64.b64encode(raw).decode()
+
+        # Remove o PDF antigo que estava sendo armazenado dentro do config
+        target.pop(f"{kind}_data", None)
 
         config["categories"] = cats
-        ok = save_config(config)
+
+        if not save_config(config):
+            return jsonify({
+                "success": False,
+                "message": "Arquivo foi enviado, mas não foi possível atualizar a configuração."
+            })
+
+        # CONFIRMA que realmente gravou
+        saved = db_query("""
+            SELECT id, filename, category, kind
+            FROM attachments
+            WHERE category = %s
+              AND kind = %s
+            LIMIT 1
+        """, (cat_id, kind), fetch="one")
+
+        if not saved:
+            return jsonify({
+                "success": False,
+                "message": "O arquivo não foi encontrado após o salvamento."
+            })
+
         return jsonify({
-            "success": ok,
-            "message": "Currículo enviado!" if ok else "Erro ao salvar no banco",
-            "filename": fname,
+            "success": True,
+            "message": "Currículo enviado e salvo no banco!",
+            "filename": saved["filename"],
+            "category": saved["category"],
+            "kind": saved["kind"]
+        })
+
+    except Exception as e:
+        print(f"ERRO UPLOAD CURRICULO: {type(e).__name__}: {e}")
+
+        return jsonify({
+            "success": False,
+            "message": f"Erro ao salvar currículo: {str(e)}"
         })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
