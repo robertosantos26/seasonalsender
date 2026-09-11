@@ -1,0 +1,131 @@
+diff --git a/Procfile b/Procfile
+index fc26aca..705fea7 100644
+--- a/Procfile
++++ b/Procfile
+@@ -1 +1 @@
+-web: gunicorn startup:app --bind 0.0.0.0:$PORT --workers 1 --threads 2
++web: gunicorn startup:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 90
+diff --git a/app.py b/app.py
+index 7d9870f..a51c620 100644
+--- a/app.py
++++ b/app.py
+@@ -7,7 +7,7 @@ from email import encoders
+ from datetime import datetime
+ from bs4 import BeautifulSoup
+ import psycopg2
+-from psycopg2.extras import RealDictCursor
++from psycopg2.extras import RealDictCursor, execute_values
+ from psycopg2 import pool
+ 
+ app = Flask(__name__)
+@@ -263,23 +263,34 @@ def fetch_rss_jobs(keywords="", category_filter="all", categories=None):
+         return [], msg
+ 
+ def upsert_jobs(jobs):
++    """Insere todas as vagas em UMA única ida ao banco (bulk insert), em vez de
++    uma query por vaga. Buscas amplas (categoria 'all' ou palavras genéricas como
++    'farm') podem trazer centenas de vagas; inserir uma a uma facilmente estoura o
++    timeout do worker do Render antes de responder, o que fazia o front receber uma
++    página de erro (HTML) em vez de JSON."""
+     if not jobs:
+         return 0
+-    added = 0
+-    for job in jobs:
+-        try:
+-            result = db_query("""
++    rows = [
++        (job["id"], json.dumps(job), job.get("timestamp", 0), job.get("status", "pending"))
++        for job in jobs
++    ]
++    conn = get_conn()
++    try:
++        with conn.cursor(cursor_factory=RealDictCursor) as cur:
++            execute_values(cur, """
+                 INSERT INTO jobs (id, data, timestamp, status)
+-                VALUES (%s, %s, %s, %s)
++                VALUES %s
+                 ON CONFLICT (id) DO NOTHING
+                 RETURNING id
+-            """, (job["id"], json.dumps(job), job.get("timestamp", 0), job.get("status","pending")),
+-            fetch="one")
+-            if result:
+-                added += 1
+-        except:
+-            pass
+-    return added
++            """, rows)
++            added = len(cur.fetchall())
++            conn.commit()
++            return added
++    except Exception:
++        conn.rollback()
++        return 0
++    finally:
++        release_conn(conn)
+ 
+ def fetch_job_detail(url):
+     try:
+@@ -383,6 +394,22 @@ def read_attachment(folder, filename, config=None):
+ def get_base_url(config):
+     return (config.get("app_base_url") or os.environ.get("RENDER_EXTERNAL_URL","") or "").rstrip("/")
+ 
++def display_attachment_name(stored_filename, config):
++    """Gera o nome do arquivo mostrado para quem recebe o email (ex: 'server_cv.pdf'
++    -> 'Roberto_server_cv.pdf'), sem alterar o nome interno usado para localizar o
++    arquivo na tabela attachments."""
++    if not stored_filename:
++        return stored_filename
++    name = (config.get("name") or "").strip()
++    if not name:
++        return stored_filename
++    safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-")).strip()
++    safe_name = safe_name.replace(" ", "_")
++    if not safe_name:
++        return stored_filename
++    base, ext = os.path.splitext(stored_filename)
++    return f"{safe_name}_{base}{ext}"
++
+ def send_email_smtp(to_email, subject, body, cv_file, config, cover_letter_file="", tracking_id=None):
+     """Envia email via Google Apps Script relay (HTTPS — funciona em qualquer plataforma)."""
+     gas_url      = os.environ.get("GAS_WEBHOOK_URL", "")
+@@ -413,7 +440,7 @@ def send_email_smtp(to_email, subject, body, cv_file, config, cover_letter_file=
+         if fname:
+             data = read_attachment("curriculos", fname, config)
+             if data:
+-                attachments.append({"filename": fname, "content": data})
++                attachments.append({"filename": display_attachment_name(fname, config), "content": data})
+     if attachments:
+         payload["attachments"] = attachments
+ 
+diff --git a/render.yaml b/render.yaml
+index 9e1945c..153eae5 100644
+--- a/render.yaml
++++ b/render.yaml
+@@ -3,7 +3,7 @@ services:
+     name: seasonalsender
+     runtime: python
+     buildCommand: pip install -r requirements.txt
+-    startCommand: gunicorn startup:app --bind 0.0.0.0:$PORT --workers 1 --threads 2
++    startCommand: gunicorn startup:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 90
+     envVars:
+       - key: DATABASE_URL
+         sync: false
+diff --git a/templates/index.html b/templates/index.html
+index 08995f9..e5d5ac1 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -453,7 +453,13 @@ async function uploadCategoryFile(input, catId, kind, i){
+ async function api(path, method='GET', body=null){
+   const o={method,headers:{'Content-Type':'application/json'}};
+   if(body) o.body=JSON.stringify(body);
+-  return (await fetch(path,o)).json();
++  const r = await fetch(path,o);
++  const txt = await r.text();
++  try{
++    return txt ? JSON.parse(txt) : {success:false, error:'Resposta vazia do servidor (timeout?)'};
++  }catch(e){
++    return {success:false, error:'O servidor demorou demais para responder ou caiu no meio da busca. Tente novamente com uma categoria/palavra-chave mais específica.'};
++  }
+ }
+ 
+ function toast(msg, ok=true){
