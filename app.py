@@ -344,17 +344,40 @@ def build_email_content(job, config):
     return subj, body, cv, cl
 
 def read_attachment(folder, filename, config=None):
-    """Busca o PDF enviado pela página (salvo no banco) e, se não houver, cai para o disco (compatibilidade)."""
-    if config and filename:
-        for cat in (config.get("categories") or []):
-            if cat.get("cv") == filename and cat.get("cv_data"):
-                return cat["cv_data"]
-            if cat.get("cover_letter") == filename and cat.get("cover_letter_data"):
-                return cat["cover_letter_data"]
-    path = os.path.join(folder, filename)
-    if os.path.exists(path):
-        with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode()
+    """Busca o arquivo salvo na tabela attachments."""
+    if not filename:
+        return None
+
+    try:
+        row = db_query("""
+            SELECT content
+            FROM attachments
+            WHERE filename = %s
+            LIMIT 1
+        """, (filename,), fetch="one")
+
+        if row and row["content"] is not None:
+            content = row["content"]
+
+            if isinstance(content, memoryview):
+                content = content.tobytes()
+
+            if isinstance(content, bytes):
+                return base64.b64encode(content).decode()
+
+            return base64.b64encode(bytes(content)).decode()
+
+    except Exception as e:
+        print(f"ERRO AO LER ANEXO DO BANCO: {type(e).__name__}: {e}")
+
+    # Compatibilidade com arquivos antigos no disco
+    if filename:
+        path = os.path.join(folder, filename)
+
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                return base64.b64encode(f.read()).decode()
+
     return None
 
 def get_base_url(config):
