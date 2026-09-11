@@ -370,8 +370,8 @@ function slugify(s){
 function renderCategoryRows(){
   const el = document.getElementById('cat-rows');
   el.innerHTML = categories.map((c,i)=>`
-    <div style="padding:10px 0;margin-bottom:12px;border-bottom:1px solid #2a2d3e">
-      <div style="display:flex;gap:8px;margin-bottom:6px">
+<div style="padding:10px 0;margin-bottom:12px">
+<div style="display:flex;gap:8px;margin-bottom:6px">
         <input class="fi ff" style="flex:1" placeholder="Rótulo (ex: 🧱 Construção)" value="${c.label||''}" oninput="categories[${i}].label=this.value">
         ${c.id!=='general'?`<button class="btn bo bsm" onclick="removeCategoryRow(${i})" title="Remover"><i class="ti ti-trash"></i></button>`:''}
       </div>
