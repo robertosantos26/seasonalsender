@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SeasonalSender — Configurações</title>
+<style>
+body{font-family:Arial,sans-serif;background:#0f1117;color:#eee;margin:0;padding:30px}
+.wrap{max-width:1100px;margin:auto}
+.card{background:#1a1d2e;border:1px solid #303448;border-radius:14px;padding:22px;margin-bottom:18px}
+h1,h2{margin-top:0}
+label{display:block;font-size:13px;color:#aaa;margin:12px 0 5px}
+input,textarea,select{width:100%;box-sizing:border-box;background:#10131c;color:#eee;border:1px solid #363b50;border-radius:8px;padding:10px}
+textarea{min-height:120px;resize:vertical}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.cat{border-top:1px solid #303448;padding-top:18px;margin-top:18px}
+.cat-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.btn{border:0;border-radius:8px;padding:10px 15px;cursor:pointer;font-weight:600}
+.primary{background:#4f8ef7;color:white}
+.danger{background:#3a1f26;color:#ff8a8a}
+.ghost{background:transparent;border:1px solid #363b50;color:#ccc}
+.ok{color:#22c55e}
+.muted{color:#888;font-size:12px}
+.filebox{background:#10131c;border:1px dashed #464c64;border-radius:8px;padding:12px;margin-top:8px}
+.back{color:#9abfff;text-decoration:none}
+.status{margin-top:12px;padding:10px;border-radius:8px;background:#10131c}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p><a class="back" href="/">← Voltar ao SeasonalSender</a></p>
+  <h1>⚙️ Configurações</h1>
+
+  <div class="card">
+    <h2>📧 Dados do remetente</h2>
+    <div class="grid">
+      <div><label>Nome</label><input id="name"></div>
+      <div><label>E-mail</label><input id="email" type="email"></div>
+      <div><label>Senha / App Password</label><input id="email_password" type="password" placeholder="deixe em branco para manter a atual"></div>
+      <div><label>Telefone</label><input id="phone"></div>
+      <div><label>SMTP</label><input id="smtp_server"></div>
+      <div><label>Porta</label><input id="smtp_port" type="number"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🎯 Mensagem e currículo por tipo de vaga</h2>
+    <p class="muted">O sistema classifica a vaga pelas palavras-chave. Cada categoria (ex: housekeeper, construção, farm...) usa seu próprio assunto, mensagem e currículo — envie o PDF direto por aqui, não precisa subir arquivo no GitHub.</p>
+    <div id="categories"></div>
+    <div class="actions" style="margin-top:16px">
+      <button class="btn ghost" onclick="addCategory()">➕ Adicionar categoria</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🤖 Envio automático</h2>
+    <div class="grid">
+      <div><label>Limite diário</label><input id="daily_send_limit" type="number" min="1"></div>
+      <div><label>Palavras-chave gerais</label><input id="keywords" placeholder="horse,housekeeper,server"></div>
+      <div><label>Início da janela</label><input id="send_window_start" type="time"></div>
+      <div><label>Fim da janela</label><input id="send_window_end" type="time"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="actions">
+      <button class="btn primary" onclick="save()">💾 Salvar configurações</button>
+      <button class="btn ghost" onclick="testEmail()">🧪 Testar e-mail</button>
+      <span id="status"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+let cfg = {};
+const esc = s => String(s ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+const slug = s => (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || ('cat_' + Date.now());
+
+async function load(){
+  const r = await fetch('/api/web-config');
+  cfg = await r.json();
+  for (const k of ['name','email','phone','smtp_server','smtp_port','daily_send_limit','keywords','send_window_start','send_window_end']){
+    const e = document.getElementById(k);
+    if (e) e.value = cfg[k] ?? '';
+  }
+  renderCats();
+}
+
+function renderCats(){
+  const box = document.getElementById('categories');
+  box.innerHTML = (cfg.categories || []).map((c,i) => `
+    <div class="cat">
+      <div class="cat-head">
+        <div style="flex:1"><label>Nome da categoria</label><input id="lbl${i}" value="${esc(c.label)}" placeholder="Ex: 🧱 Construção"></div>
+        <button class="btn danger" style="margin-top:20px" onclick="removeCategory(${i})">🗑️ Remover</button>
+      </div>
+      <input type="hidden" id="catid${i}" value="${esc(c.id)}">
+      <label>Palavras-chave (separadas por vírgula, usadas para identificar a vaga)</label>
+      <input id="kw${i}" value="${esc(c.keywords)}" placeholder="construction,carpenter,laborer,framing">
+      <label>Assunto do e-mail</label>
+      <input id="sub${i}" value="${esc(c.subject || '')}" placeholder="Application for {job_title} - {your_name}">
+      <label>Mensagem do e-mail</label>
+      <textarea id="msg${i}" placeholder="Deixe em branco para usar a mensagem padrão geral">${esc(c.message || '')}</textarea>
+      <div class="grid">
+        <div>
+          <label>Currículo PDF</label>
+          <div class="filebox">
+            <input type="file" accept="application/pdf" onchange="upload(this,'${esc(c.id)}','cv')">
+            <div class="muted" id="cv${i}">${esc(c.cv || 'Nenhum currículo enviado')}</div>
+          </div>
+        </div>
+        <div>
+          <label>Cover letter PDF (opcional)</label>
+          <div class="filebox">
+            <input type="file" accept="application/pdf" onchange="upload(this,'${esc(c.id)}','cover_letter')">
+            <div class="muted" id="cl${i}">${esc(c.cover_letter || 'Nenhuma cover letter enviada')}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function addCategory(){
+  collect();
+  cfg.categories = cfg.categories || [];
+  cfg.categories.push({id: 'cat_' + Date.now(), label: 'Nova categoria', keywords: '', subject: '', message: '', cv: '', cover_letter: ''});
+  renderCats();
+}
+
+function removeCategory(i){
+  collect();
+  if (!confirm('Remover a categoria "' + (cfg.categories[i].label || '') + '"?')) return;
+  cfg.categories.splice(i,1);
+  renderCats();
+}
+
+async function upload(input, cat, kind){
+  if (!input.files[0]) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  fd.append('category', cat);
+  fd.append('kind', kind);
+  setStatus('Enviando arquivo...');
+  const r = await fetch('/api/upload-curriculo', {method:'POST', body: fd});
+  const d = await r.json();
+  setStatus(d.message, d.success);
+  if (d.success) load();
+}
+
+function collect(){
+  cfg.name = document.getElementById('name').value;
+  cfg.email = document.getElementById('email').value;
+  const p = document.getElementById('email_password').value;
+  if (p) cfg.email_password = p;
+  cfg.phone = document.getElementById('phone').value;
+  cfg.smtp_server = document.getElementById('smtp_server').value;
+  cfg.smtp_port = Number(document.getElementById('smtp_port').value || 587);
+  cfg.daily_send_limit = Number(document.getElementById('daily_send_limit').value || 50);
+  cfg.keywords = document.getElementById('keywords').value;
+  cfg.send_window_start = document.getElementById('send_window_start').value;
+  cfg.send_window_end = document.getElementById('send_window_end').value;
+  (cfg.categories || []).forEach((c,i) => {
+    const lbl = document.getElementById('lbl'+i);
+    if (lbl) {
+      c.label = lbl.value;
+      if (!c.id) c.id = slug(c.label);
+    }
+    c.keywords = document.getElementById('kw'+i).value;
+    c.subject = document.getElementById('sub'+i).value;
+    c.message = document.getElementById('msg'+i).value;
+  });
+}
+
+async function save(){
+  collect();
+  const r = await fetch('/api/web-config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)});
+  const d = await r.json();
+  setStatus(d.message, d.success);
+  if (d.success) load();
+}
+
+async function testEmail(){
+  collect();
+  await save();
+  const to = cfg.email;
+  const r = await fetch('/api/test-email', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({to})});
+  const d = await r.json();
+  setStatus(d.message, d.success);
+}
+
+function setStatus(t, ok){
+  const e = document.getElementById('status');
+  e.textContent = t;
+  e.className = ok === false ? '' : 'ok';
+}
+
+load();
+</script>
+</body>
+</html>
