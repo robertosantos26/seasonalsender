@@ -3,11 +3,11 @@ services:
     name: seasonalsender
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2
+    startCommand: gunicorn startup:app --bind 0.0.0.0:$PORT --workers 1 --threads 2
     envVars:
       - key: DATABASE_URL
-        sync: false        # connection string do Supabase (Settings > Database > Connection string)
+        sync: false
       - key: GAS_WEBHOOK_URL
-        sync: false        # URL do Google Apps Script publicado (ver GUIA_CONFIGURACAO.md)
+        sync: false
       - key: CRON_SECRET
-        sync: false        # senha aleatória para proteger o endpoint /api/cron/tick
+        sync: false
