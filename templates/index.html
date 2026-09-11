@@ -395,9 +395,22 @@ function renderCategoryRows(){
         </div>
         <div class="fg" style="flex:1;margin-bottom:0">
           <label class="fl" style="font-size:10px">📄 Cover letter (PDF, opcional)</label>
-          <input type="file" accept="application/pdf" class="fi ff" onchange="uploadCategoryFile(this,'${c.id}','cover_letter',${i})">
-          <div style="font-size:11px;color:#666;margin-top:4px" id="cl-status-${i}">${c.cover_letter?('Atual: '+c.cover_letter):'Nenhuma cover letter enviada'}</div>
-        </div>
+          <input type="file" accept="application/pdf" class="fi ff" onchange="uploadCategoryFile(this,'${c.id}','cv',${i})">
+
+<div id="cv-status-${i}" style="
+  font-size:11px;
+  margin-top:6px;
+  padding:7px 9px;
+  border-radius:6px;
+  background:${c.cv ? '#14532d22' : '#0f1117'};
+  border:1px solid ${c.cv ? '#22c55e44' : '#2a2d3e'};
+  color:${c.cv ? '#22c55e' : '#666'};
+">
+  ${c.cv
+    ? '📎 Currículo salvo: <strong>'+c.cv+'</strong>'
+    : 'Nenhum currículo enviado'
+  }
+</div>
       </div>
     </div>`).join('');
 }
@@ -424,10 +437,17 @@ async function uploadCategoryFile(input, catId, kind, i){
     const r = await fetch('/api/upload-curriculo', {method:'POST', body: fd});
     const d = await r.json();
     if(d.success){
-      categories[i][kind] = d.filename;
-      statusEl.textContent = 'Atual: ' + d.filename;
-      toast('Arquivo enviado!');
-    } else {
+  categories[i][kind] = d.filename;
+
+  statusEl.innerHTML =
+    `📎 ${kind==='cv' ? 'Currículo' : 'Cover letter'} salvo: <strong>${d.filename}</strong>`;
+
+  statusEl.style.background = '#14532d22';
+  statusEl.style.border = '1px solid #22c55e44';
+  statusEl.style.color = '#22c55e';
+
+  toast('Arquivo salvo com sucesso!');
+} else {
       statusEl.textContent = 'Erro: ' + (d.message||'falha no envio');
       toast(d.message||'Erro ao enviar arquivo', false);
     }
