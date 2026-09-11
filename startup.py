@@ -176,7 +176,7 @@ def upload_curriculo():
         if not cat:
             return jsonify({'success': False, 'message': f'Categoria inválida: {category}'}), 400
 
-        stored = ('curriculo_' if kind == 'cv' else 'cover_') + category + '.pdf'
+stored = filename
 
         main.db_query('''INSERT INTO attachments(id,category,kind,filename,content,content_type)
             VALUES(%s,%s,%s,%s,%s,%s)
