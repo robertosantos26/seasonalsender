@@ -427,13 +427,13 @@ def send_email_smtp(to_email, subject, body, cv_file, config, cover_letter_file=
     if not sender_email:
         return False, "Email não configurado em Configurações."
 
-   html_body = body.replace("\n", "<br>")
-base_url = get_base_url(config)
-if tracking_id and base_url:
-    html_body += f'<img src="{base_url}/api/track/{tracking_id}.gif" width="1" height="1" style="display:none" alt="">'
-    add_log(f"DEBUG pixel incluido: tid={tracking_id} base_url={base_url}", "found")
-else:
-    add_log(f"DEBUG pixel NAO incluido: tracking_id={tracking_id!r} base_url={base_url!r}", "error")
+    html_body = body.replace("\n", "<br>")
+    base_url = get_base_url(config)
+    if tracking_id and base_url:
+        html_body += f'<img src="{base_url}/api/track/{tracking_id}.gif" width="1" height="1" style="display:none" alt="">'
+        add_log(f"DEBUG pixel incluido: tid={tracking_id} base_url={base_url}", "found")
+    else:
+        add_log(f"DEBUG pixel NAO incluido: tracking_id={tracking_id!r} base_url={base_url!r}", "error")
 
     payload = {
         "to":          to_email,
