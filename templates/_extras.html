@@ -1,0 +1,96 @@
+<div id="refs-card" style="background:#1a1d2e;border:1px solid #303448;border-radius:12px;padding:18px;margin:16px 0;color:#eee;font-family:inherit">
+  <div style="font-weight:700;font-size:15px;margin-bottom:6px">📎 Cartas de referência</div>
+  <div style="font-size:12px;color:#999;margin-bottom:10px">Envie até 5 cartas em PDF (máx. 5 MB cada). Elas são anexadas junto com o currículo e a cover letter nos e-mails de candidatura. Escolha em quais categorias cada carta vai.</div>
+  <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:10px;cursor:pointer">
+    <input type="checkbox" id="refs-enabled" onchange="RefLetters.saveEnabled()"> Anexar cartas de referência nos e-mails
+  </label>
+  <div id="refs-slots"></div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+    <select id="refs-test-cat" style="background:#10131c;color:#eee;border:1px solid #363b50;border-radius:8px;padding:8px"></select>
+    <button type="button" onclick="RefLetters.test()" style="background:#4f8ef7;color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;font-weight:600">🧪 Enviar teste para mim</button>
+    <span id="refs-status" style="font-size:12px;color:#22c55e"></span>
+  </div>
+</div>
+<script>
+window.RefLetters = (function(){
+  let state = {slots: [], categories: []};
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const status = (t, ok) => { const e = document.getElementById('refs-status'); if (e){ e.textContent = t; e.style.color = ok === false ? '#ff8a8a' : '#22c55e'; } };
+  const post = async (url, body) => {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    try { return await r.json(); } catch(e){ return {success:false, message:'Resposta inválida do servidor'}; }
+  };
+
+  function render(){
+    document.getElementById('refs-enabled').checked = !!state.enabled;
+    document.getElementById('refs-test-cat').innerHTML = state.categories.map(c => `<option value="${esc(c.id)}">Teste como: ${esc(c.label)}</option>`).join('');
+    document.getElementById('refs-slots').innerHTML = state.slots.map(s => {
+      const all = (s.categories || ['all']).includes('all');
+      const checks = state.categories.map(c => `<label style="font-size:12px;margin-right:10px;white-space:nowrap"><input type="checkbox" data-slot="${s.slot}" class="refs-cat" value="${esc(c.id)}" ${all || s.categories.includes(c.id) ? 'checked':''} ${all ? 'disabled':''} onchange="RefLetters.saveApply(${s.slot})"> ${esc(c.label)}</label>`).join('');
+      return `<div style="border-top:1px solid #303448;padding:10px 0">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <b style="font-size:13px">Carta ${s.slot}</b>
+          <span style="font-size:12px;color:${s.filename ? '#22c55e':'#777'}">${s.filename ? '✅ ' + esc(s.filename) + ' (' + s.size_kb + ' KB)' : 'Nenhuma carta enviada'}</span>
+          <input type="file" accept="application/pdf" onchange="RefLetters.upload(this, ${s.slot})" style="font-size:12px">
+          ${s.filename ? `<button type="button" onclick="RefLetters.remove(${s.slot})" style="background:#3a1f26;color:#ff8a8a;border:0;border-radius:6px;padding:5px 9px;cursor:pointer">🗑️</button>` : ''}
+        </div>
+        ${s.filename ? `<div style="margin-top:6px"><label style="font-size:12px;margin-right:12px"><input type="checkbox" id="refs-all-${s.slot}" ${all ? 'checked':''} onchange="RefLetters.toggleAll(${s.slot})"> <b>Todas as categorias</b></label>${checks}</div>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  async function load(){
+    try {
+      const r = await fetch('/api/references'); const d = await r.json();
+      if (d.success){ state = d; render(); } else status(d.message || 'Erro ao carregar cartas', false);
+    } catch(e){ status('Erro ao carregar cartas', false); }
+  }
+  async function upload(input, slot){
+    if (!input.files[0]) return;
+    status('Enviando...');
+    const fd = new FormData(); fd.append('file', input.files[0]); fd.append('slot', slot);
+    try {
+      const r = await fetch('/api/references/upload', {method:'POST', body: fd});
+      const d = await r.json();
+      status(d.message, d.success); if (d.success) load();
+    } catch(e){ status('Erro ao enviar carta', false); }
+    input.value = '';
+  }
+  async function remove(slot){
+    if (!confirm('Remover a carta ' + slot + '?')) return;
+    const d = await post('/api/references/delete', {slot}); status(d.success ? 'Carta removida.' : d.message, d.success); load();
+  }
+  async function saveEnabled(){
+    const d = await post('/api/references/settings', {enabled: document.getElementById('refs-enabled').checked});
+    status(d.success ? 'Salvo.' : d.message, d.success);
+  }
+  function toggleAll(slot){
+    const all = document.getElementById('refs-all-' + slot).checked;
+    document.querySelectorAll(`.refs-cat[data-slot="${slot}"]`).forEach(e => { e.disabled = all; e.checked = all; });
+    saveApply(slot);
+  }
+  async function saveApply(slot){
+    const all = document.getElementById('refs-all-' + slot).checked;
+    const cats = all ? ['all'] : [...document.querySelectorAll(`.refs-cat[data-slot="${slot}"]:checked`)].map(e => e.value);
+    if (!all && !cats.length){ status('Marque ao menos uma categoria (ou "Todas").', false); return; }
+    const d = await post('/api/references/settings', {apply: {[slot]: cats}});
+    status(d.success ? 'Salvo.' : d.message, d.success);
+  }
+  async function test(){
+    status('Enviando teste...');
+    const d = await post('/api/references/test', {category: document.getElementById('refs-test-cat').value});
+    status(d.success ? 'Teste enviado. Anexos: ' + (d.anexos || []).join(', ') : (d.message || 'Falha no teste'), d.success);
+  }
+  document.addEventListener('DOMContentLoaded', load);
+  if (document.readyState !== 'loading') load();
+  return {upload, remove, saveEnabled, toggleAll, saveApply, test};
+})();
+
+async function recategorizePending(){
+  try {
+    const r = await fetch('/api/recategorize', {method:'POST'}); const d = await r.json();
+    alert(d.success ? d.changed + ' vagas pendentes reclassificadas.' : (d.message || 'Erro ao reclassificar'));
+    if (d.success && typeof loadJobs === 'function') loadJobs();
+  } catch(e){ alert('Erro ao reclassificar'); }
+}
+</script>
